@@ -27,10 +27,15 @@ def main():
         if value is None or value == "":
             continue
         print("| %s | %s |" % (key, str(value).replace("|", "\\|").replace("\n", " ")))
-    grant = ((data.get("detail") or {}).get("grant") or {})
+    detail = data.get("detail") or {}
+    grant = detail.get("grant") or {}
     for key in ("created_at", "grant_at", "expire_at", "points", "valid_hours"):
         if grant.get(key) is not None:
             print("| %s | %s |" % (key, str(grant[key]).replace("|", "\\|")))
+    balance = detail.get("balance") or {}
+    for key in ("available_points", "daily_points", "reward_points", "monthly_points"):
+        if balance.get(key) is not None:
+            print("| balance.%s | %s |" % (key, str(balance[key]).replace("|", "\\|")))
     return 0
 
 

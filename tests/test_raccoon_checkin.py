@@ -145,6 +145,25 @@ class TestSummary(unittest.TestCase):
         self.assertNotIn("SHOULD_NOT_LEAK", out)
         os.remove(path)
 
+    def test_balance_observations_in_summary(self):
+        import io
+        from contextlib import redirect_stdout
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_tmp_bal.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"status": "ok", "message": "ok",
+                       "detail": {"balance": {"daily_points": 300,
+                                              "available_points": 9300,
+                                              "owner_id": "SHOULD_NOT_LEAK"}}}, f)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            with mock.patch.object(sys, "argv", ["summarize_result.py", path]):
+                sr.main()
+        out = buf.getvalue()
+        self.assertIn("balance.daily_points", out)
+        self.assertIn("9300", out)
+        self.assertNotIn("SHOULD_NOT_LEAK", out)
+        os.remove(path)
+
 
 class TestBalance(unittest.TestCase):
     def test_read_balance_ok(self):
