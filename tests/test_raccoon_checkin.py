@@ -25,22 +25,29 @@ def make_jwt(payload):
 class TestEvaluate(unittest.TestCase):
     TODAY = "2026-11-09"
 
-    def test_extended(self):
+    def test_grant_today_ok(self):
         grant = {"created_at": "2026-11-09T00:00:01+08:00",
                  "grant_at": "2026-11-09T00:00:01+08:00",
                  "expire_at": "2026-11-16T00:00:00+08:00", "points": 300}
         ok, msg, detail = rc.evaluate(grant, self.TODAY)
         self.assertTrue(ok)
-        self.assertIn("已延长", msg)
+        self.assertIn("已到账", msg)
         self.assertAlmostEqual(detail["valid_hours"], 168, delta=0.1)
+        self.assertEqual(detail["expire_at_policy"], "observed_only")
 
-    def test_not_extended(self):
+    def test_short_expiry_still_ok(self):
+        """用户实测 300 积分不过期：24h 档位不能判失败。"""
         grant = {"created_at": "2026-11-09T00:00:01+08:00",
                  "grant_at": "2026-11-09T00:00:01+08:00",
                  "expire_at": "2026-11-09T23:59:59+08:00", "points": 300}
-        ok, msg, _ = rc.evaluate(grant, self.TODAY)
-        self.assertFalse(ok)
-        self.assertIn("未延长", msg)
+        ok, msg, detail = rc.evaluate(grant, self.TODAY)
+        self.assertTrue(ok)
+        self.assertIn("已到账", msg)
+        self.assertAlmostEqual(detail["valid_hours"], 24, delta=0.1)
+
+    def test_zero_points_fails(self):
+        grant = {"created_at": "2026-11-09T00:00:01+08:00", "points": "0"}
+        self.assertFalse(rc.evaluate(grant, self.TODAY)[0])
 
     def test_yesterday_record_is_not_today(self):
         grant = {"created_at": "2026-11-08T00:00:01+08:00",
@@ -137,6 +144,50 @@ class TestSummary(unittest.TestCase):
         self.assertIn("status", out)
         self.assertNotIn("SHOULD_NOT_LEAK", out)
         os.remove(path)
+
+
+class TestBalance(unittest.TestCase):
+    def test_read_balance_ok(self):
+        with mock.patch.object(rc, "http_json", return_value=(
+                200, {"code": 0, "data": {"available_points": 9300,
+                                           "daily_points": 300,
+                                           "reward_points": 9000,
+                                           "owner_id": 7944725}}, "")):
+            bal, err = rc.read_balance("fake")
+        self.assertIsNone(err)
+        self.assertEqual(bal["daily_points"], 300)
+        self.assertNotIn("owner_id", bal)
+
+    def test_read_balance_error(self):
+        with mock.patch.object(rc, "http_json", return_value=(500, None, "boom")):
+            bal, err = rc.read_balance("fake")
+        self.assertIsNone(bal)
+        self.assertIn("HTTP 500", err)
+
+    def test_attach_balance_failure_is_nonfatal(self):
+        r = {"detail": {}}
+        with mock.patch.object(rc, "http_json", return_value=(500, None, "boom")):
+            rc.attach_balance(r, "fake")
+        self.assertNotIn("balance", r["detail"])
+        self.assertIn("balance_error", r["detail"])
+
+
+class TestOwnership(unittest.TestCase):
+    def test_internal_id_matches_phone_label(self):
+        t = make_jwt({"sub": "internal-7080", "exp": 1796791687})
+        with mock.patch.object(rc, "INTERNAL_ID", "7080"), \
+                mock.patch.object(rc, "LABEL", "尾号4060"):
+            r = {"detail": {}}
+            self.assertTrue(rc.check_ownership(r, t))
+        self.assertEqual(r["detail"]["account_tail"], "7080")
+
+    def test_internal_id_mismatch_blocks(self):
+        t = make_jwt({"sub": "internal-9999", "exp": 1796791687})
+        with mock.patch.object(rc, "INTERNAL_ID", "7080"), \
+                mock.patch.object(rc, "LABEL", "尾号4060"):
+            r = {"detail": {}}
+            self.assertFalse(rc.check_ownership(r, t))
+        self.assertIn("归属不符", r["message"])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-name: 商汤小浣熊 每日登录延效
+name: 商汤小浣熊 每日登录动作
 
-# 云端定时模拟「桌面端登录动作」，把当日 300 积分的有效期从当日 24:00 延长到 7 天。
-# 账号体系：仓库变量 RACCOON_ACCOUNTS 里的每个尾号 = 一个 Environment `acct-<尾号>`，
-# 环境内存放该账号专属的 RACCOON_ACCESS_TOKEN（可选 RACCOON_REFRESH_TOKEN）。
+# 云端定时模拟「桌面端登录动作」，确认当日 300 积分入账。
+# 积分是否过期以客户端实测为准：账本 expire_at 字段仅作观测，不作成功判据。
+# 账号体系：仓库变量 RACCOON_ACCOUNTS 里的每个标签 = 一个 Environment `acct-<标签>`，
+# 环境内存放该账号专属的 RACCOON_ACCESS_TOKEN（登录令牌）、
+# RACCOON_ACCOUNT_ID（内部ID尾号，防串号）、可选 RACCOON_REFRESH_TOKEN。
 # 新增账号：本机登录该账号 → 双击「一键更新.bat」，无需改本文件、无需上网页加 Secret。
 
 on:
@@ -70,6 +72,7 @@ jobs:
       # 账号专属凭据（环境级 Secret 覆盖仓库级同名 Secret）
       RACCOON_ACCESS_TOKEN: ${{ secrets.RACCOON_ACCESS_TOKEN }}
       RACCOON_REFRESH_TOKEN: ${{ secrets.RACCOON_REFRESH_TOKEN }}
+      RACCOON_ACCOUNT_ID: ${{ secrets.RACCOON_ACCOUNT_ID }}
       RACCOON_ACCOUNT_LABEL: '尾号${{ matrix.tail }}'
       # 通知通道（仓库级 Secret，所有账号共用；任一为空则跳过该通道）
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}

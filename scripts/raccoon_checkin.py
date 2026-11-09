@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""商汤小浣熊「每日登录延效」云端签到核心（零第三方依赖）。
+"""商汤小浣熊「每日登录动作」云端签到核心（零第三方依赖）。
 
-机制：每日 00:00 上游自动发放 300 积分，当天无登录动作则当日 24:00 清零；
-当天有登录动作则有效期延长至 7 天。本脚本在云端模拟登录动作，并用积分账本
-daily_grant 记录的 (expire_at - grant_at) 档位核对延效是否真的生效。
+机制（以客户端实测为准，不预设积分是否过期）：
+  桌面端登录会触发当日 300 积分入账；云端每天模拟一次该登录动作，
+  并用积分账本 daily_grant 确认「今日已入账」。
+  账本里的 expire_at 字段仅作观测记录，不作为成功/失败判据，
+  因此「积分是否过期」两种模型下都不会误报失败。
 
 链路：
-  [可选] POST /api/web/auth/v1/refresh          用 refresh_token 换 access_token
-         GET  /api/web/office/v3/setting_info    桌面客户端启动动作（主触发）
-  [兜底] POST /api/web/desktop/v1/login/points/grant  直接发放（幂等）
-         GET  /api/web/points/v1/bills           核对延效档位
+  [可选] POST /api/web/auth/v1/refresh              用 refresh_token 换 access_token
+         GET  /api/web/office/v3/setting_info        桌面客户端启动动作（主触发，只读 GET）
+  [兜底] POST /api/web/desktop/v1/login/points/grant  幂等发放（仅账本未见当日记录时）
+         GET  /api/web/points/v1/bills               核对当日入账
+         GET  /api/web/points/v1/balance             观测积分分项（daily_points 是否累积）
 
 输出 result.json（不含任何令牌），退出码 0=成功 / 1=失败。
 轮换出的新令牌写入 RACCOON_ROTATED_FILE 指定的文件，供 workflow 回写 Secret。
@@ -36,19 +39,21 @@ AUTH_REFRESH_URL = ORIGIN + "/api/web/auth/v1/refresh"
 SETTING_INFO_URL = ORIGIN + "/api/web/office/v3/setting_info"
 GRANT_URL = ORIGIN + "/api/web/desktop/v1/login/points/grant"
 BILLS_URL = ORIGIN + "/api/web/points/v1/bills?paging.limit=100&paging.offset=0"
+BALANCE_URL = ORIGIN + "/api/web/points/v1/balance"
 
 CLIENT_HEADERS = {
     "X-Client-Platform": "desktop-windows",
     "X-Client-Version": "v1.0.0",
     "X-Raccoon-Language": "zh",
 }
-EXTENDED_MIN_MS = 48 * 3600 * 1000
 HTTP_TIMEOUT = 20
 RECHECK_DELAY = float(os.environ.get("RACCOON_RECHECK_DELAY") or "2")
 
 RESULT_FILE = os.environ.get("RACCOON_RESULT_FILE") or "result.json"
 ROTATED_FILE = os.environ.get("RACCOON_ROTATED_FILE") or "raccoon-rotated.env"
 LABEL = os.environ.get("RACCOON_ACCOUNT_LABEL") or "未命名账号"
+# 账号真实内部标识（JWT sub 尾 4 位）。与展示用的手机号尾号不是一回事。
+INTERNAL_ID = (os.environ.get("RACCOON_ACCOUNT_ID") or "").strip()
 
 
 def now_ts():
@@ -73,7 +78,7 @@ def jwt_payload(token):
 
 
 def account_tail(token):
-    """从 sub 取账号标识尾 4 位，仅用于日志与归属核对。"""
+    """从 sub 取内部标识尾 4 位，仅用于归属核对（不是手机号尾号）。"""
     digits = "".join(c for c in str(jwt_payload(token).get("sub") or "") if c.isdigit())
     return digits[-4:] if len(digits) >= 4 else ""
 
@@ -177,26 +182,56 @@ def read_bills(token):
     return None, None
 
 
+def read_balance(token):
+    """只读积分分项。用于观测 daily_points 是否逐日累积（判断 300 是否过期）。"""
+    status, data, text = http_json(BALANCE_URL, "GET", auth_headers(token))
+    if not data or data.get("code") != 0:
+        return None, "HTTP %s %s" % (status, str((data or {}).get("message") or text)[:150])
+    payload = data.get("data") or {}
+    if not isinstance(payload, dict):
+        return None, "余额响应格式异常"
+    keys = ("available_points", "daily_points", "reward_points", "monthly_points")
+    return {k: payload.get(k) for k in keys if k in payload}, None
+
+
+def attach_balance(result, token):
+    """余额是观测项，查询失败不影响签到结论。"""
+    balance, err = read_balance(token)
+    if balance:
+        result["detail"]["balance"] = balance
+    elif err:
+        result["detail"]["balance_error"] = err
+
+
 def evaluate(grant, today):
-    """核对延效档位。返回 (ok, message, detail)。"""
+    """成功判据：今天的每日积分已入账。
+
+    expire_at - grant_at 的档位只记录到 detail 供观测，不参与判定：
+    用户实测 300 积分不过期，若以「7 天档位」为判据会误报失败。
+    """
     if not grant:
         return False, "账本窗口内无每日发放（daily_grant）记录", {}
     created = str(grant.get("created_at") or "")[:10]
     grant_at = parse_dt(grant.get("grant_at"))
     expire_at = parse_dt(grant.get("expire_at"))
+    points = grant.get("points")
     detail = {"created_at": created,
               "grant_at": str(grant.get("grant_at") or ""),
               "expire_at": str(grant.get("expire_at") or ""),
-              "points": grant.get("points")}
-    if not grant_at or not expire_at:
-        return False, "发放记录缺少 grant_at/expire_at", detail
-    detail["valid_hours"] = round((expire_at - grant_at).total_seconds() / 3600, 2)
+              "points": points}
+    if grant_at and expire_at:
+        detail["valid_hours"] = round((expire_at - grant_at).total_seconds() / 3600, 2)
+        detail["expire_at_policy"] = "observed_only"
     if created != today:
         return False, "今日未发放：最新发放记录创建于 %s（今天 %s）" % (created or "?", today), detail
-    if (expire_at - grant_at).total_seconds() * 1000 < EXTENDED_MIN_MS:
-        return False, "有效期未延长（当日至 %s 清零）" % detail["expire_at"], detail
-    return True, "每日积分 +%s 已发放，有效期已延长至 %s" % (
-        grant.get("points") or "?", detail["expire_at"]), detail
+    try:
+        pts = float(points)
+    except (TypeError, ValueError):
+        pts = 0.0
+    if pts <= 0:
+        return False, "今日发放记录积分为 0 或缺失", detail
+    suffix = ("；账本有效期字段至 %s（仅记录）" % detail["expire_at"]) if detail["expire_at"] else ""
+    return True, "今日每日积分 +%g 已到账%s" % (pts, suffix), detail
 
 
 def write_result(result):
@@ -229,6 +264,23 @@ def base_result():
     }
 
 
+def check_ownership(result, token):
+    """防串号：优先用账号专属内部 ID；旧环境未配置时退回标签包含判断。"""
+    tail = account_tail(token)
+    result["detail"]["account_tail"] = tail
+    if not tail:
+        return True
+    if INTERNAL_ID:
+        if INTERNAL_ID != tail:
+            result["message"] = ("凭据归属不符：令牌内部ID尾号 %s 与环境登记 %s 不一致，已中止"
+                                 % (tail, INTERNAL_ID))
+            return False
+    elif LABEL and tail not in LABEL:
+        result["message"] = "凭据归属不符：令牌尾号 %s 与账号 %s 不一致，已中止" % (tail, LABEL)
+        return False
+    return True
+
+
 def diagnose(token):
     """只读自检：不触发登录动作，不产生任何签到副作用。"""
     result = base_result()
@@ -236,7 +288,10 @@ def diagnose(token):
     days, exp = token_meta(token)
     result["token_expire_at"] = exp
     result["token_days_left"] = days
-    result["detail"]["account_tail"] = account_tail(token)
+    if not check_ownership(result, token):
+        write_result(result)
+        print(result["message"])
+        return 1
     if days is not None and days <= 0:
         result["message"] = "登录令牌已过期，请在本机运行「一键更新.bat」"
         write_result(result)
@@ -253,6 +308,7 @@ def diagnose(token):
     result["detail"]["latest_grant"] = {
         k: grant.get(k) for k in ("created_at", "grant_at", "expire_at", "points")
     } if grant else None
+    attach_balance(result, token)
     write_result(result)
     print(result["message"])
     return 0
@@ -286,10 +342,7 @@ def run():
     days, exp = token_meta(at)
     result["token_expire_at"] = exp
     result["token_days_left"] = days
-    tail = account_tail(at)
-    result["detail"]["account_tail"] = tail
-    if LABEL and tail and tail not in LABEL:
-        result["message"] = "凭据归属不符：令牌尾号 %s 与账号 %s 不一致，已中止" % (tail, LABEL)
+    if not check_ownership(result, at):
         write_result(result)
         print(result["message"])
         return 1
@@ -373,6 +426,7 @@ def run():
     result["detail"]["grant"] = detail
     result["message"] = message
     result["status"] = "ok" if ok else "error"
+    attach_balance(result, at)
     write_rotated(rotated_pairs)
     write_result(result)
     print("[%s] %s" % (LABEL, message))
