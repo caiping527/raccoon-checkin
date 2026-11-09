@@ -406,5 +406,90 @@ class TestIamPasswordLogin(unittest.TestCase):
         self.assertEqual(captured.get("token"), fake_token)
 
 
+class TestIamLoginResponse(unittest.TestCase):
+    """官网后端返回 {code:"OK", data:{access_token,...}}，必须往 data 层里找。"""
+
+    FAKE = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEyMzQifQ.signature"
+
+    def setUp(self):
+        import iam_login as il
+        self.il = il
+
+    def test_wrapped_response(self):
+        resp = {"code": "OK", "data": {"access_token": self.FAKE,
+                                       "token_type": "bearer", "expires_in": 2592000}}
+        self.assertEqual(self.il.extract_token(resp), self.FAKE)
+
+    def test_bare_response(self):
+        self.assertEqual(self.il.extract_token({"access_token": self.FAKE}), self.FAKE)
+
+    def test_nested_data_data(self):
+        self.assertEqual(self.il.extract_token(
+            {"code": "OK", "data": {"data": {"access_token": self.FAKE}}}), self.FAKE)
+
+    def test_no_token(self):
+        self.assertEqual(self.il.extract_token({"code": "OK", "data": {"foo": 1}}), "")
+        self.assertEqual(self.il.extract_token({"code": "INVALID"}), "")
+        self.assertEqual(self.il.extract_token(None), "")
+        self.assertEqual(self.il.extract_token({"data": "oops"}), "")
+
+    def test_describe_masks_secrets(self):
+        d = self.il.describe_response(
+            {"code": "OK", "data": {"access_token": self.FAKE,
+                                    "user": {"phone": "13400000000"}}})
+        s = json.dumps(d, ensure_ascii=False)
+        self.assertNotIn(self.FAKE, s)
+        self.assertNotIn("13400000000", s)
+        self.assertIn("access_token", s)
+
+
+class TestCloudPasswordLogin(unittest.TestCase):
+    """云端自动登录也要能解出包裹层里的 token。"""
+
+    def test_wrapped_token_used(self):
+        fake = make_jwt({"sub": "user-1234", "exp": 2000000000})
+        captured = {}
+
+        def fake_result():
+            return {"status": "pending", "message": "", "detail": {},
+                    "account": "手机号尾号4060", "checked_at": "x"}
+
+        with mock.patch.dict(os.environ, {"RACCOON_PHONE": "13400000000",
+                                          "RACCOON_PASSWORD": "SECRET",
+                                          "RACCOON_ACCESS_TOKEN": "old-token",
+                                          "RACCOON_ACCOUNT_ID": "1234"}, clear=False), \
+             mock.patch.object(rc, "base_result", side_effect=fake_result), \
+             mock.patch.object(sys, "argv", ["raccoon_checkin.py", "--check-only"]), \
+             mock.patch("iam_login.login_password",
+                        return_value=(200, {"code": "OK", "data": {
+                            "access_token": fake, "token_type": "bearer"}}, [])), \
+             mock.patch.object(rc, "diagnose", side_effect=lambda t: captured.setdefault("token", t) or 0), \
+             mock.patch.object(rc, "write_rotated"):
+            rc.run()
+        self.assertEqual(captured.get("token"), fake)
+
+
+class TestPasswordPrompt(unittest.TestCase):
+    def test_default_shows_password(self):
+        import password_login as pl
+        args = mock.Mock(hide_password=False, phone="13400000000", password="")
+        with mock.patch("builtins.input", return_value="MYPASS") as inp, \
+             mock.patch.object(sys, "stdin") as stdin:
+            stdin.isatty.return_value = True
+            _, pwd = pl.ask_credentials(args)
+        self.assertEqual(pwd, "MYPASS")
+        self.assertIn("明文显示", inp.call_args[0][0])
+
+    def test_hide_password_uses_getpass(self):
+        import password_login as pl
+        args = mock.Mock(hide_password=True, phone="13400000000", password="")
+        with mock.patch("getpass.getpass", return_value="HIDDEN") as gp, \
+             mock.patch.object(sys, "stdin") as stdin:
+            stdin.isatty.return_value = True
+            _, pwd = pl.ask_credentials(args)
+        self.assertEqual(pwd, "HIDDEN")
+        gp.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

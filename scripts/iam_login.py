@@ -159,6 +159,60 @@ def login_password(phone, password, nation_code="86", key=DEFAULT_KEY,
     return status, data, [c.name for c in jar]
 
 
+TOKEN_KEYS = ("access_token", "accessToken", "token", "jwt")
+
+
+def extract_token(response):
+    """从 IAM 响应中提取 access_token。
+
+    官网请求层（模块 37756）是 `return n.data ?? {}`，即前端拿到的对象
+    其实是后端的 data 层。后端原始响应形如：
+        {"code":"OK", "data":{"access_token":"eyJ...", "token_type":"bearer"}}
+    历史版本只查顶层，导致 HTTP 200 却误判为登录失败。这里兼容多种包装。
+    """
+    if not isinstance(response, dict):
+        return ""
+    candidates = [response]
+    for key in ("data", "result", "payload"):
+        v = response.get(key)
+        if isinstance(v, dict):
+            candidates.append(v)
+            inner = v.get("data")
+            if isinstance(inner, dict):
+                candidates.append(inner)
+    for obj in candidates:
+        for k in TOKEN_KEYS:
+            v = obj.get(k)
+            if isinstance(v, str) and len(v.strip()) >= 20:
+                return v.strip()
+    return ""
+
+
+def describe_response(response):
+    """脱敏描述响应结构，便于排错；绝不输出令牌/密码/手机号原文。"""
+    masked_words = ("token", "secret", "password", "cookie", "key", "phone", "credential")
+
+    def shape(o, depth=0):
+        if depth > 3:
+            return "..."
+        if isinstance(o, dict):
+            out = {}
+            for k, v in o.items():
+                lk = str(k).lower()
+                if any(word in lk for word in masked_words):
+                    out[k] = "<%s len=%d>" % (type(v).__name__, len(str(v)))
+                elif isinstance(v, (dict, list)):
+                    out[k] = shape(v, depth + 1)
+                else:
+                    out[k] = str(v)[:60]
+            return out
+        if isinstance(o, list):
+            return ["<%d items>" % len(o)]
+        return str(o)[:80]
+
+    return shape(response)
+
+
 def probe(token, path, timeout=12):
     req = urllib.request.Request(BASE + path, headers=_headers(token))
     try:
@@ -225,7 +279,7 @@ def main():
     if safe:
         print("响应(脱敏):", json.dumps(safe, ensure_ascii=False)[:400])
     print("Set-Cookie 名称:", cookies)
-    token = data.get("access_token")
+    token = extract_token(data)
     if token:
         print("令牌元信息:", json.dumps(token_meta(token), ensure_ascii=False))
         # 令牌写进环境变量供后续步骤使用（本次进程内）

@@ -8,7 +8,8 @@
   完全不依赖桌面客户端，也不需要打开或退出小浣熊。
 
 流程：
-  1. 本机输入手机号与密码（密码不回显、不落盘、不打印、不进命令行参数）
+  1. 本机输入手机号与密码（默认明文显示便于核对，可加 --hide-password 隐藏；
+     不落盘、不打印到日志、不进命令行参数）
   2. POST /api/iam/v1/auth/login/password/phone 换取 access_token
      （官网同款 AES-128-CFB 加密，实现见 scripts/iam_login.py）
   3. 只读 IAM 接口取掩码手机号后 4 位作显示标签，JWT sub 尾号作防串号校验
@@ -46,7 +47,11 @@ def ask_credentials(args):
     if not password:
         if not sys.stdin.isatty():
             update.die("未取得密码", "双击「密码登录.bat」后按提示输入，或自行设置 RACCOON_PASSWORD")
-        password = getpass.getpass("  请输入密码（输入不显示）：")
+        if args.hide_password:
+            password = getpass.getpass("  请输入密码（输入不显示）：")
+        else:
+            # 默认回显，方便肉眼核对有没有输错；不想显示可加 --hide-password
+            password = input("  请输入密码（明文显示，便于核对）：")
     if not password:
         update.die("密码为空", "重新运行并输入密码")
     return phone, password
@@ -63,6 +68,8 @@ def main():
                        help="同时把手机号+密码写入该账号 Environment Secret，供云端每天自动登录")
     store.add_argument("--no-store-password", dest="store_password", action="store_false",
                        help="只写本次令牌，不保存密码")
+    ap.add_argument("--hide-password", action="store_true",
+                    help="输入密码时不回显（默认明文显示，便于核对）")
     ap.set_defaults(store_password=None)
     ap.add_argument("--no-run", action="store_true", help="不触发云端自检")
     args = ap.parse_args()
@@ -95,16 +102,20 @@ def main():
                           else "已选择：只存本次令牌（约 30 天后需重跑一次）"))
 
     phone, password = ask_credentials(args)
-    print("\n  正在用密码向官方换取独立登录会话…（凭据不外显）")
+    print("\n  正在用密码向官方换取独立登录会话…（令牌不外显）")
     try:
         status, data, _ = iam_login.login_password(phone, password, args.nation_code)
     except Exception as exc:
         update.die("登录请求异常：%s: %s" % (type(exc).__name__, str(exc)[:160]),
                    "检查网络/代理后重试；若持续失败把本窗口内容发给维护者",
                    target="密码登录")
-    token = data.get("access_token")
+    # 后端响应是 {code:"OK", data:{access_token, token_type:"bearer"}}，
+    # 必须往 data 层里找，不能只看顶层（历史 bug：HTTP 200 却报失败）。
+    token = iam_login.extract_token(data)
     if status != 200 or not token:
         code = data.get("code") or data.get("message") or data.get("raw") or "无详情"
+        print("  【诊断】响应结构（已脱敏）：%s" % json.dumps(
+            iam_login.describe_response(data), ensure_ascii=False)[:500])
         update.die("密码登录失败：HTTP %s %s" % (status, str(code)[:200]),
                    "确认手机号/密码正确；若提示人机验证或账号被锁定，先在官网登录页手工登录一次再试",
                    target="密码登录")

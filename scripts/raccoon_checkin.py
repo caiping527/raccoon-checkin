@@ -335,7 +335,7 @@ def run():
             import iam_login
             status, data, _ = iam_login.login_password(
                 phone, pwd, os.environ.get("RACCOON_NATION_CODE") or "86")
-            fresh = data.get("access_token")
+            fresh = iam_login.extract_token(data)
             if status == 200 and fresh:
                 at = fresh
                 result["detail"]["auth_mode"] = "password"
@@ -343,6 +343,9 @@ def run():
             else:
                 why = str(data.get("code") or data.get("message") or "无详情")[:120]
                 print("云端密码登录失败(HTTP %s %s)，回退到已存令牌" % (status, why))
+                # 脱敏输出响应结构，便于定位包装层变化
+                print("  响应结构：%s" % json.dumps(
+                    iam_login.describe_response(data), ensure_ascii=False)[:300])
                 result["detail"]["password_login_error"] = why
         except Exception as exc:
             print("云端密码登录异常(%s)，回退到已存令牌" % type(exc).__name__)
