@@ -1,7 +1,20 @@
 @echo off
 chcp 65001 >nul
+setlocal
+title Raccoon Checkin - Switch Account
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
 cd /d "%~dp0"
-title 小浣熊 - 账号切换（免登出）
-python 账号切换.py
+where python >nul 2>nul
+if errorlevel 1 goto nopython
+python switch_account.py %*
 echo.
 pause
+exit /b 0
+
+:nopython
+echo.
+echo [ERROR] Python not found. Please install Python 3 (check "Add to PATH") and retry.
+echo.
+pause
+exit /b 1

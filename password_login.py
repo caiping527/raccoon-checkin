@@ -13,8 +13,8 @@
      （官网同款 AES-128-CFB 加密，实现见 scripts/iam_login.py）
   3. 只读 IAM 接口取掩码手机号后 4 位作显示标签，JWT sub 尾号作防串号校验
   4. 写入账号专属 Environment / Secrets，登记账号列表，触发云端只读自检
-  5. 可选 --store-password：把手机号+密码也写入该环境 Secret，
-     之后云端每天自动登录换新令牌，连 30 天令牌过期都不用管
+  5. 双击运行时会询问是否把密码也存入云端（默认「是」）：
+     存了之后云端每天自动登录换新令牌，连 30 天令牌过期都不用管
 
 凭据只在本机内存中出现；传给 gh 的令牌/密码一律走 stdin。
 """
@@ -58,8 +58,12 @@ def main():
     ap.add_argument("--password", help="密码（不建议在命令行明文传，留空交互输入）")
     ap.add_argument("--nation-code", default="86")
     ap.add_argument("--repo", help="目标仓库 owner/repo")
-    ap.add_argument("--store-password", action="store_true",
-                    help="同时把手机号+密码写入该账号 Environment Secret，供云端每天自动登录")
+    store = ap.add_mutually_exclusive_group()
+    store.add_argument("--store-password", dest="store_password", action="store_true",
+                       help="同时把手机号+密码写入该账号 Environment Secret，供云端每天自动登录")
+    store.add_argument("--no-store-password", dest="store_password", action="store_false",
+                       help="只写本次令牌，不保存密码")
+    ap.set_defaults(store_password=None)
     ap.add_argument("--no-run", action="store_true", help="不触发云端自检")
     args = ap.parse_args()
 
@@ -68,13 +72,36 @@ def main():
     print("=" * 60)
     repo = update.resolve_repo(args.repo)
     print("  目标仓库：%s" % repo)
-    if not (os.environ.get("GH_TOKEN") or "").strip():
-        update.die("缺少 GH_TOKEN 环境变量",
-                   "把你的 GitHub 令牌设为系统环境变量 GH_TOKEN（需 Secrets 读写 + Actions 写权限）")
+
+    # gh CLI 既可用 GH_TOKEN 环境变量，也可用 gh auth login 的本地凭据。
+    # 只在实际两者都不可用时才报错，避免误伤已登录 gh 的机器。
+    if not (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip():
+        st = update.gh(["auth", "status"], check=False)
+        if st.returncode != 0:
+            update.die("GitHub CLI 未登录",
+                       "运行 gh auth login，或把 GitHub 令牌设为用户环境变量 GH_TOKEN"
+                       "（需 Secrets 读写 + Actions 写权限）")
+
+    # 双击运行时在这里问一次（中文由 Python 输出，避开 cmd 的编码/换行坑）。
+    # 非交互场景（如 CI）默认不保存密码，避免卡住。
+    if args.store_password is None:
+        if sys.stdin.isatty():
+            ans = input("\n  是否把密码一并存入云端，实现每天自动登录、永不管令牌过期？"
+                        "[Y/n，回车=是]：").strip().lower()
+            args.store_password = ans not in ("n", "no", "2")
+        else:
+            args.store_password = False
+        print("  → %s" % ("已选择：密码存入云端，以后全自动" if args.store_password
+                          else "已选择：只存本次令牌（约 30 天后需重跑一次）"))
 
     phone, password = ask_credentials(args)
     print("\n  正在用密码向官方换取独立登录会话…（凭据不外显）")
-    status, data, _ = iam_login.login_password(phone, password, args.nation_code)
+    try:
+        status, data, _ = iam_login.login_password(phone, password, args.nation_code)
+    except Exception as exc:
+        update.die("登录请求异常：%s: %s" % (type(exc).__name__, str(exc)[:160]),
+                   "检查网络/代理后重试；若持续失败把本窗口内容发给维护者",
+                   target="密码登录")
     token = data.get("access_token")
     if status != 200 or not token:
         code = data.get("code") or data.get("message") or data.get("raw") or "无详情"
@@ -123,7 +150,7 @@ def main():
                    "--repo", repo, "--env", env_name], stdin=password)
         print("  ✓ 已写入 RACCOON_PHONE / RACCOON_PASSWORD（云端每天自动登录，不再需要管令牌过期）")
     else:
-        print("  · 未开启 --store-password：约 30 天后令牌到期时重新运行本工具即可")
+        print("  · 未保存密码：约 30 天后令牌到期时重新双击「密码登录.bat」即可")
 
     cur = update.gh(["variable", "get", "RACCOON_ACCOUNTS", "--repo", repo], check=False)
     existing = [t for t in re.split(r"[,\s]+", (cur.stdout or "").strip())

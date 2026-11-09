@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
-title Raccoon Checkin Token Updater
+title Raccoon Checkin - Token Updater
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
 cd /d "%~dp0"
