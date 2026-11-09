@@ -159,9 +159,9 @@ def recommend_rows(root):
         except (TypeError, ValueError):
             daily = 0.0
         try:
-            reward = float(expiry.get("held_reward_points")
-                           if expiry.get("held_reward_points") is not None
-                           else balance.get("reward_points") or 0)
+            # 榜单展示客户端里的真实奖励余额；校正用的「有到期日部分」
+            # 留在 expiry.held_reward_points，不拿来当总余额显示
+            reward = float(balance.get("reward_points") or 0)
         except (TypeError, ValueError):
             reward = 0.0
         rows.append({
