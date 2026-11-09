@@ -1,0 +1,152 @@
+name: 商汤小浣熊 每日登录延效
+
+# 云端定时模拟「桌面端登录动作」，把当日 300 积分的有效期从当日 24:00 延长到 7 天。
+# 账号体系：仓库变量 RACCOON_ACCOUNTS 里的每个尾号 = 一个 Environment `acct-<尾号>`，
+# 环境内存放该账号专属的 RACCOON_ACCESS_TOKEN（可选 RACCOON_REFRESH_TOKEN）。
+# 新增账号：本机登录该账号 → 双击「一键更新.bat」，无需改本文件、无需上网页加 Secret。
+
+on:
+  schedule:
+    # UTC 01:17 = 北京时间 09:17（避开整点高峰；GitHub 定时为 best-effort）
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: '仅自检，不触发登录动作'
+        required: false
+        default: false
+        type: boolean
+
+# 令牌可能轮换，定时与手动必须串行，避免两轮并发互相作废
+concurrency:
+  group: raccoon-checkin
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare_accounts:
+    name: 读取账号列表
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      count: ${{ steps.build.outputs.count }}
+    steps:
+      - name: 生成动态 matrix
+        id: build
+        env:
+          LIST: ${{ vars.RACCOON_ACCOUNTS }}
+        run: |
+          items=""; n=0
+          for t in $(printf '%s' "$LIST" | tr ',' ' '); do
+            case "$t" in ''|*[!0-9]*) continue ;; esac
+            [ "${#t}" -eq 4 ] || continue
+            [ -z "$items" ] || items="$items,"
+            items="$items{\"tail\":\"$t\"}"
+            n=$((n + 1))
+          done
+          if [ "$n" -eq 0 ]; then
+            echo 'matrix={"include":[{"tail":"none"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          echo "已登记账号数：$n"
+
+  checkin:
+    name: 执行签到 · 尾号${{ matrix.tail }}
+    needs: prepare_accounts
+    if: ${{ needs.prepare_accounts.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false            # 某账号失败不影响其他账号
+      matrix: ${{ fromJson(needs.prepare_accounts.outputs.matrix) }}
+    environment: acct-${{ matrix.tail }}
+
+    env:
+      # 账号专属凭据（环境级 Secret 覆盖仓库级同名 Secret）
+      RACCOON_ACCESS_TOKEN: ${{ secrets.RACCOON_ACCESS_TOKEN }}
+      RACCOON_REFRESH_TOKEN: ${{ secrets.RACCOON_REFRESH_TOKEN }}
+      RACCOON_ACCOUNT_LABEL: '尾号${{ matrix.tail }}'
+      # 通知通道（仓库级 Secret，所有账号共用；任一为空则跳过该通道）
+      WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+      WECOM_APP: ${{ secrets.WECOM_APP }}
+      SUCCESS_NOTIFY: ${{ vars.SUCCESS_NOTIFY }}
+      RACCOON_WARN_DAYS: '7'
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 检查凭据是否已配置
+        run: |
+          if [ -n "$RACCOON_ACCESS_TOKEN" ] || [ -n "$RACCOON_REFRESH_TOKEN" ]; then
+            echo "✓ 凭据已配置（内容不外显）"
+          else
+            echo "::error::环境 acct-${{ matrix.tail }} 未配置 RACCOON_ACCESS_TOKEN，请在本机登录该账号后双击「一键更新.bat」"
+            exit 1
+          fi
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 环境自检（只读）
+        id: diagnose
+        run: python scripts/raccoon_checkin.py --diagnose
+
+      - name: 执行签到
+        id: checkin
+        if: ${{ steps.diagnose.outcome == 'success' }}
+        # 手动触发且勾选「仅自检」时不产生登录动作
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.check_only }}" = "true" ]; then
+            ARGS="--check-only"
+          fi
+          set +e
+          python scripts/raccoon_checkin.py $ARGS
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      - name: 输出运行摘要
+        if: always()
+        run: |
+          echo "### 小浣熊签到 · 尾号${{ matrix.tail }}" >> "$GITHUB_STEP_SUMMARY"
+          python scripts/summarize_result.py result.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 企业微信通知（失败 / 令牌临期）
+        if: always()
+        env:
+          RACCOON_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/wecom_notify.py result.json
+
+      - name: 回写轮换后的令牌
+        if: always()
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          ACCOUNT_TAIL: ${{ matrix.tail }}
+        run: |
+          [ -s raccoon-rotated.env ] || exit 0
+          if [ -z "$GH_PAT" ]; then
+            echo "::warning::令牌已轮换但未配置 GH_PAT Secret，请在本机运行「一键更新.bat」"
+            exit 0
+          fi
+          while IFS='=' read -r name token; do
+            [ -n "$name" ] && [ -n "$token" ] || continue
+            case "$name" in RACCOON_ACCESS_TOKEN|RACCOON_REFRESH_TOKEN) ;; *) continue ;; esac
+            printf '%s' "$token" | GH_TOKEN="$GH_PAT" gh secret set "$name" --env "acct-$ACCOUNT_TAIL"
+            echo "✓ 已回写 $name 到环境 acct-$ACCOUNT_TAIL"
+          done < raccoon-rotated.env
+
+      - name: 失败时标记任务
+        if: ${{ always() && (steps.diagnose.outcome != 'success' || steps.checkin.outcome == 'failure') }}
+        run: |
+          echo "::error::尾号${{ matrix.tail }} 签到未成功，请查看上方日志与运行摘要"
+          exit 1

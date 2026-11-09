@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.env
+result.json
+raccoon-rotated.env
+tools/更新记录.txt
+*.log
