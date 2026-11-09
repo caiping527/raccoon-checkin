@@ -41,13 +41,26 @@ GRANT_URL = ORIGIN + "/api/web/desktop/v1/login/points/grant"
 BILLS_URL = ORIGIN + "/api/web/points/v1/bills?paging.limit=100&paging.offset=0"
 BALANCE_URL = ORIGIN + "/api/web/points/v1/balance"
 
+CONFIRM_URL = ORIGIN + "/api/web/auth/v1/iam/confirm"
+# 官网前端在每次 /api/web/* 业务请求前都会 POST 该接口确认会话。
+# 密码登录换到的是一个全新会话，未确认时网关直接回
+#   HTTP 400 / code=200901 / message=iam_confirm_required
+# 桌面客户端的旧令牌早已确认过，所以过去没暴露这个问题。
+CONFIRM_CODES = (200901, "200901", "iam_confirm_required", "IAM_CONFIRM_REQUIRED")
+
 CLIENT_HEADERS = {
     "X-Client-Platform": "desktop-windows",
     "X-Client-Version": "v1.0.0",
     "X-Raccoon-Language": "zh",
 }
-HTTP_TIMEOUT = 20
+HTTP_TIMEOUT = float(os.environ.get("RACCOON_HTTP_TIMEOUT") or "15")
+# GitHub Actions 到国内接口偶发抖动：网络异常/5xx 自动重试，避免误报失败
+HTTP_RETRIES = int(os.environ.get("RACCOON_HTTP_RETRIES") or "2")
+RETRY_BACKOFF = float(os.environ.get("RACCOON_RETRY_BACKOFF") or "1")
 RECHECK_DELAY = float(os.environ.get("RACCOON_RECHECK_DELAY") or "2")
+
+# 本次运行的会话状态：Cookie 与确认结果只在内存，绝不写进 result.json / 企微文案
+SESSION = {"cookie": "", "confirm": None, "confirm_auto": False, "network_retries": 0}
 
 RESULT_FILE = os.environ.get("RACCOON_RESULT_FILE") or "result.json"
 ROTATED_FILE = os.environ.get("RACCOON_ROTATED_FILE") or "raccoon-rotated.env"
@@ -93,8 +106,8 @@ def token_meta(token):
     return round(left, 2), dt
 
 
-def http_json(url, method="GET", headers=None, body=None):
-    """返回 (status, parsed_dict_or_None, text)。异常不抛出。"""
+def _http_once(url, method="GET", headers=None, body=None):
+    """单次请求，返回 (status, parsed_dict_or_None, text)。异常不抛出。"""
     req = urllib.request.Request(url, data=body, method=method)
     for k, v in (headers or {}).items():
         req.add_header(k, v)
@@ -114,8 +127,70 @@ def http_json(url, method="GET", headers=None, body=None):
         return status, None, text[:500]
 
 
+def http_json(url, method="GET", headers=None, body=None):
+    """带重试的请求；只对网络异常与 5xx 重试，4xx 业务错误立即返回。"""
+    last = (0, None, "网络错误: 未执行")
+    for attempt in range(HTTP_RETRIES + 1):
+        last = _http_once(url, method, headers, body)
+        status = last[0]
+        if status != 0 and not (500 <= status < 600):
+            return last
+        if attempt < HTTP_RETRIES:
+            SESSION["network_retries"] += 1
+            time.sleep(min(RETRY_BACKOFF * (attempt + 1), 3))
+    if last[0] == 0:
+        return 0, None, "网络请求失败（已重试 %d 次）：%s" % (
+            HTTP_RETRIES, last[2][:150])
+    return last
+
+
 def auth_headers(token):
     return {"Accept": "application/json", "Authorization": "Bearer %s" % token}
+
+
+def needs_confirm(status, data, text):
+    """网关要求确认会话：HTTP 400 + code=200901 或 iam_confirm_required。"""
+    if status != 400:
+        return False
+    if (data or {}).get("code") in CONFIRM_CODES:
+        return True
+    blob = ("%s %s" % ((data or {}).get("message") or "", text or "")).lower()
+    return "iam_confirm_required" in blob
+
+
+def confirm_session(token):
+    """复刻官网 business.request：POST /api/web/auth/v1/iam/confirm。
+
+    请求体是注册上下文，官网默认即空对象 {}；返回 code==0 表示会话已确认。
+    只输出 http/code，不输出任何令牌或 Cookie 内容。
+    """
+    headers = dict(auth_headers(token))
+    headers["Content-Type"] = "application/json"
+    if SESSION.get("cookie"):
+        headers["Cookie"] = SESSION["cookie"]
+    status, data, text = http_json(CONFIRM_URL, "POST", headers, b"{}")
+    ok = status == 200 and (data or {}).get("code") in (0, "0", "OK", "ok")
+    detail = {"http": status,
+              "code": (data or {}).get("code"),
+              "message": str((data or {}).get("message") or text)[:120],
+              "ok": ok}
+    SESSION["confirm"] = detail
+    return ok, detail
+
+
+def api_json(url, token, method="GET", extra=None, body=None):
+    """业务请求：自动带登录 Cookie；遇到「会话未确认」先确认再重试一次。"""
+    headers = dict(auth_headers(token))
+    headers.update(extra or {})
+    if SESSION.get("cookie"):
+        headers["Cookie"] = SESSION["cookie"]
+    status, data, text = http_json(url, method, headers, body)
+    if needs_confirm(status, data, text):
+        ok, _ = confirm_session(token)
+        SESSION["confirm_auto"] = True
+        if ok:
+            status, data, text = http_json(url, method, headers, body)
+    return status, data, text
 
 
 def refresh_access_token(refresh_token):
@@ -133,18 +208,15 @@ def refresh_access_token(refresh_token):
 
 def trigger_login(token, use_grant=False):
     """模拟桌面端登录动作。返回 (ok, detail)。"""
-    headers = dict(auth_headers(token))
-    headers.update(CLIENT_HEADERS)
-    status, data, text = http_json(SETTING_INFO_URL, "GET", headers)
+    status, data, text = api_json(SETTING_INFO_URL, token, "GET", CLIENT_HEADERS)
     if not data or data.get("code") != 0:
         return False, {"step": "setting_info", "http": status,
                        "code": (data or {}).get("code"),
                        "message": str((data or {}).get("message") or text)[:200]}
     detail = {"step": "setting_info", "http": status, "code": 0}
     if use_grant:
-        g_status, g_data, g_text = http_json(
-            GRANT_URL, "POST", dict(auth_headers(token),
-                                    **{"Content-Type": "application/json"}), b"{}")
+        g_status, g_data, g_text = api_json(
+            GRANT_URL, token, "POST", {"Content-Type": "application/json"}, b"{}")
         detail["grant"] = {
             "http": g_status,
             "code": (g_data or {}).get("code"),
@@ -169,7 +241,7 @@ def parse_dt(value):
 
 def read_bills(token):
     """返回 (latest_daily_grant_or_None, err)。"""
-    status, data, text = http_json(BILLS_URL, "GET", auth_headers(token))
+    status, data, text = api_json(BILLS_URL, token)
     if not data or data.get("code") != 0:
         return None, "HTTP %s %s" % (status, str((data or {}).get("message") or text)[:150])
     payload = data.get("data") or {}
@@ -184,7 +256,7 @@ def read_bills(token):
 
 def read_balance(token):
     """只读积分分项。用于观测 daily_points 是否逐日累积（判断 300 是否过期）。"""
-    status, data, text = http_json(BALANCE_URL, "GET", auth_headers(token))
+    status, data, text = api_json(BALANCE_URL, token)
     if not data or data.get("code") != 0:
         return None, "HTTP %s %s" % (status, str((data or {}).get("message") or text)[:150])
     payload = data.get("data") or {}
@@ -250,6 +322,13 @@ def write_rotated(pairs):
 
 
 def base_result():
+    detail = {}
+    if SESSION.get("confirm"):
+        detail["iam_confirm"] = SESSION["confirm"]
+    if SESSION.get("confirm_auto"):
+        detail["iam_confirm_auto"] = True
+    if SESSION.get("network_retries"):
+        detail["network_retries"] = SESSION["network_retries"]
     return {
         "app": "raccoon",
         "account": LABEL,
@@ -260,7 +339,7 @@ def base_result():
         "token_expire_at": None,
         "token_days_left": None,
         "rotated": False,
-        "detail": {},
+        "detail": detail,
     }
 
 
@@ -303,6 +382,14 @@ def diagnose(token):
                 "请双击「密码登录.bat」用手机号+密码重新登记（不依赖桌面客户端）；"
                 "若在客户端操作，切勿点退出登录"
             )
+        elif "iam_confirm_required" in err or "200901" in err:
+            result["detail"]["confirm_failed"] = True
+            result["message"] = ("会话确认失败：云端已自动确认并重试仍被网关拦截，"
+                                 "请重新双击「密码登录.bat」登记该账号")
+        elif err.startswith("HTTP 0") or "网络请求失败" in err:
+            result["detail"]["transient_network"] = True
+            result["message"] = ("云端到小浣熊接口网络波动：%s（已自动重试，"
+                                 "不影响下次定时签到）" % err)
         else:
             result["message"] = "账本只读查询失败：%s" % err
         write_result(result)
@@ -320,6 +407,8 @@ def diagnose(token):
 
 
 def run():
+    SESSION.update({"cookie": "", "confirm": None,
+                    "confirm_auto": False, "network_retries": 0})
     result = base_result()
     at = (os.environ.get("RACCOON_ACCESS_TOKEN") or "").strip()
     rt = (os.environ.get("RACCOON_REFRESH_TOKEN") or "").strip()
@@ -333,13 +422,22 @@ def run():
     if phone and pwd:
         try:
             import iam_login
-            status, data, _ = iam_login.login_password(
+            status, data, _, cookie = iam_login.login_password_full(
                 phone, pwd, os.environ.get("RACCOON_NATION_CODE") or "86")
+            # 官网业务请求会带登录 Cookie（credentials:"include"），这里只在内存传递
+            SESSION["cookie"] = cookie or ""
             fresh = iam_login.extract_token(data)
             if status == 200 and fresh:
                 at = fresh
                 result["detail"]["auth_mode"] = "password"
-                print("云端密码登录成功：已取得独立会话（令牌内容不外显）")
+                # 新会话必须先确认，否则 /api/web/* 会被网关拦成 iam_confirm_required
+                c_ok, c_detail = confirm_session(at)
+                result["detail"]["iam_confirm"] = c_detail
+                print("云端密码登录成功：已取得独立会话；会话确认 %s（令牌内容不外显）"
+                      % ("成功" if c_ok else "待业务请求时自动重试"))
+                if not c_ok:
+                    print("  确认响应：HTTP %s code=%s" % (
+                        c_detail.get("http"), c_detail.get("code")))
             else:
                 why = str(data.get("code") or data.get("message") or "无详情")[:120]
                 print("云端密码登录失败(HTTP %s %s)，回退到已存令牌" % (status, why))

@@ -131,9 +131,14 @@ def _headers(token=None):
     return h
 
 
-def login_password(phone, password, nation_code="86", key=DEFAULT_KEY,
-                   product_codes=None, timeout=20):
-    """返回 (http_status, response_dict, cookie_names)。不记录/不回传明文凭据。"""
+def login_password_full(phone, password, nation_code="86", key=DEFAULT_KEY,
+                        product_codes=None, timeout=20):
+    """返回 (http_status, response_dict, cookie_names, cookie_header)。
+
+    官网前端对 /api/web/* 的请求带 credentials:"include"，即会携带登录时
+    下发的 Cookie。这里把 Cookie 头一并交给调用方（只在内存传递、绝不打印），
+    用于后续 /api/web/auth/v1/iam/confirm 会话确认。
+    """
     body = {
         "nation_code": nation_code,
         "phone": encrypt_credential(phone, key),
@@ -156,7 +161,16 @@ def login_password(phone, password, nation_code="86", key=DEFAULT_KEY,
         data = json.loads(raw)
     except Exception:
         data = {"raw": raw[:300]}
-    return status, data, [c.name for c in jar]
+    cookie_header = "; ".join("%s=%s" % (c.name, c.value) for c in jar)
+    return status, data, [c.name for c in jar], cookie_header
+
+
+def login_password(phone, password, nation_code="86", key=DEFAULT_KEY,
+                   product_codes=None, timeout=20):
+    """兼容旧调用：返回 (http_status, response_dict, cookie_names)。"""
+    status, data, names, _ = login_password_full(
+        phone, password, nation_code, key, product_codes, timeout)
+    return status, data, names
 
 
 TOKEN_KEYS = ("access_token", "accessToken", "token", "jwt")

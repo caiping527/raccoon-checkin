@@ -398,8 +398,10 @@ class TestIamPasswordLogin(unittest.TestCase):
                                           "RACCOON_ACCOUNT_ID": "1234"}, clear=False), \
              mock.patch.object(rc, "base_result", side_effect=fake_result), \
              mock.patch.object(sys, "argv", ["raccoon_checkin.py", "--check-only"]), \
-             mock.patch("iam_login.login_password",
-                        return_value=(200, {"access_token": fake_token}, [])), \
+             mock.patch("iam_login.login_password_full",
+                        return_value=(200, {"access_token": fake_token}, [], "sid=fake")), \
+             mock.patch.object(rc, "confirm_session",
+                               return_value=(True, {"http": 200, "code": 0, "ok": True})), \
              mock.patch.object(rc, "diagnose", side_effect=lambda t: captured.setdefault("token", t) or 0), \
              mock.patch.object(rc, "write_rotated"):
             rc.run()
@@ -460,9 +462,11 @@ class TestCloudPasswordLogin(unittest.TestCase):
                                           "RACCOON_ACCOUNT_ID": "1234"}, clear=False), \
              mock.patch.object(rc, "base_result", side_effect=fake_result), \
              mock.patch.object(sys, "argv", ["raccoon_checkin.py", "--check-only"]), \
-             mock.patch("iam_login.login_password",
+             mock.patch("iam_login.login_password_full",
                         return_value=(200, {"code": "OK", "data": {
-                            "access_token": fake, "token_type": "bearer"}}, [])), \
+                            "access_token": fake, "token_type": "bearer"}}, [], "")), \
+             mock.patch.object(rc, "confirm_session",
+                               return_value=(True, {"http": 200, "code": 0, "ok": True})), \
              mock.patch.object(rc, "diagnose", side_effect=lambda t: captured.setdefault("token", t) or 0), \
              mock.patch.object(rc, "write_rotated"):
             rc.run()
@@ -489,6 +493,172 @@ class TestPasswordPrompt(unittest.TestCase):
             _, pwd = pl.ask_credentials(args)
         self.assertEqual(pwd, "HIDDEN")
         gp.assert_called_once()
+
+
+class TestIamConfirm(unittest.TestCase):
+    """官网 business.request：/api/web/* 前必须 POST iam/confirm 确认会话。"""
+
+    def setUp(self):
+        rc.SESSION.update({"cookie": "", "confirm": None,
+                           "confirm_auto": False, "network_retries": 0})
+
+    def test_needs_confirm_variants(self):
+        self.assertTrue(rc.needs_confirm(
+            400, {"code": 200901, "message": "iam_confirm_required"}, ""))
+        self.assertTrue(rc.needs_confirm(
+            400, {"code": "iam_confirm_required"}, ""))
+        self.assertTrue(rc.needs_confirm(400, None, "iam_confirm_required"))
+        self.assertFalse(rc.needs_confirm(401, {"code": 200003}, ""))
+        self.assertFalse(rc.needs_confirm(400, {"message": "bad request"}, ""))
+        self.assertFalse(rc.needs_confirm(200, {"code": 0}, ""))
+
+    def test_confirm_posts_empty_json_with_bearer_and_cookie(self):
+        captured = {}
+
+        def fake_http(url, method="GET", headers=None, body=None):
+            captured.update(url=url, method=method, headers=headers, body=body)
+            return 200, {"code": 0}, ""
+
+        with mock.patch.object(rc, "http_json", side_effect=fake_http), \
+                mock.patch.dict(rc.SESSION, {"cookie": "sid=abc"}):
+            ok, detail = rc.confirm_session("FAKE_TOKEN")
+        self.assertTrue(ok)
+        self.assertTrue(captured["url"].endswith("/api/web/auth/v1/iam/confirm"))
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["body"], b"{}")
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer FAKE_TOKEN")
+        self.assertEqual(captured["headers"]["Cookie"], "sid=abc")
+        self.assertEqual(detail["code"], 0)
+
+    def test_confirm_failure_is_reported_not_raised(self):
+        with mock.patch.object(rc, "http_json", return_value=(
+                401, {"code": "AUTH_INVALID"}, "unauthorized")):
+            ok, detail = rc.confirm_session("FAKE_TOKEN")
+        self.assertFalse(ok)
+        self.assertEqual(detail["http"], 401)
+        self.assertNotIn("FAKE_TOKEN", json.dumps(detail, ensure_ascii=False))
+
+    def test_api_json_confirms_then_retries_once(self):
+        calls = []
+        replies = [
+            (400, {"code": 200901, "message": "iam_confirm_required"},
+             "iam_confirm_required"),
+            (200, {"code": 0}, ""),                       # confirm
+            (200, {"code": 0, "data": {"items": []}}, ""),  # 原请求重试
+        ]
+
+        def fake_http(url, method="GET", headers=None, body=None):
+            calls.append(url)
+            return replies.pop(0)
+
+        with mock.patch.object(rc, "http_json", side_effect=fake_http):
+            status, data, _ = rc.api_json(rc.BILLS_URL, "FAKE_TOKEN")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["code"], 0)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(any("iam/confirm" in u for u in calls))
+        self.assertTrue(rc.SESSION["confirm_auto"])
+
+    def test_cookie_is_forwarded_to_business_request(self):
+        captured = {}
+
+        def fake_http(url, method="GET", headers=None, body=None):
+            captured["headers"] = headers
+            return 200, {"code": 0}, ""
+
+        with mock.patch.object(rc, "http_json", side_effect=fake_http), \
+                mock.patch.dict(rc.SESSION, {"cookie": "sid=xyz"}):
+            rc.api_json(rc.BILLS_URL, "FAKE_TOKEN")
+        self.assertEqual(captured["headers"]["Cookie"], "sid=xyz")
+
+
+class TestHttpRetry(unittest.TestCase):
+    """GitHub Actions 到国内接口偶发超时，不能一次失败就推送告警。"""
+
+    def test_network_error_retried_then_succeeds(self):
+        replies = [(0, None, "网络错误: timed out"),
+                   (0, None, "网络错误: timed out"),
+                   (200, {"code": 0}, "")]
+        with mock.patch.object(rc, "_http_once", side_effect=replies), \
+                mock.patch("time.sleep"):
+            status, data, _ = rc.http_json("https://example.invalid/x")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["code"], 0)
+
+    def test_network_failure_message_reports_retries(self):
+        with mock.patch.object(rc, "_http_once", return_value=(
+                0, None, "网络错误: timed out")), \
+                mock.patch("time.sleep"):
+            status, data, text = rc.http_json("https://example.invalid/x")
+        self.assertEqual(status, 0)
+        self.assertIsNone(data)
+        self.assertIn("已重试", text)
+
+    def test_business_4xx_is_not_retried(self):
+        with mock.patch.object(rc, "_http_once", return_value=(
+                401, {"code": 200003}, "revoked")) as once, \
+                mock.patch("time.sleep"):
+            status, _, _ = rc.http_json("https://example.invalid/x")
+        self.assertEqual(status, 401)
+        self.assertEqual(once.call_count, 1)
+
+    def test_server_5xx_is_retried(self):
+        replies = [(503, None, "busy"), (200, {"code": 0}, "")]
+        with mock.patch.object(rc, "_http_once", side_effect=replies), \
+                mock.patch("time.sleep"):
+            status, _, _ = rc.http_json("https://example.invalid/x")
+        self.assertEqual(status, 200)
+
+
+class TestTransientFailureMessage(unittest.TestCase):
+    def test_timeout_is_labelled_as_network_fluctuation(self):
+        captured = {}
+        with mock.patch.object(rc, "read_bills",
+                               return_value=(None, "HTTP 0 网络错误: timed out")), \
+                mock.patch.object(rc, "check_ownership", return_value=True), \
+                mock.patch.object(rc, "token_meta", return_value=(20.0, "2026-12-09")), \
+                mock.patch.object(rc, "write_result", side_effect=lambda r: captured.update(r)):
+            rc.diagnose("fake")
+        self.assertIn("网络波动", captured["message"])
+        self.assertTrue(captured["detail"]["transient_network"])
+
+    def test_confirm_failure_has_actionable_message(self):
+        captured = {}
+        with mock.patch.object(rc, "read_bills",
+                               return_value=(None, "HTTP 400 iam_confirm_required")), \
+                mock.patch.object(rc, "check_ownership", return_value=True), \
+                mock.patch.object(rc, "token_meta", return_value=(20.0, "2026-12-09")), \
+                mock.patch.object(rc, "write_result", side_effect=lambda r: captured.update(r)):
+            rc.diagnose("fake")
+        self.assertIn("密码登录.bat", captured["message"])
+        self.assertTrue(captured["detail"]["confirm_failed"])
+
+
+class TestLoginCookiePlumbing(unittest.TestCase):
+    def test_full_login_returns_four_values(self):
+        import iam_login as il
+
+        fake_token = "eyJhbGciOiJub25lIn0.fakepayload.signature"
+
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return ('{"code":"OK","data":{"access_token":"%s"}}' % fake_token).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch.object(il.urllib.request, "build_opener") as bo:
+            bo.return_value.open.return_value = FakeResp()
+            out = il.login_password_full("13000000000", "SECRET")
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out[2], [])
+        self.assertEqual(out[3], "")
+        self.assertEqual(il.extract_token(out[1]), fake_token)
 
 
 if __name__ == "__main__":
