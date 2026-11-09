@@ -9,8 +9,8 @@ name: 商汤小浣熊 每日登录动作
 
 on:
   schedule:
-    # UTC 01:17 = 北京时间 09:17（避开整点高峰；GitHub 定时为 best-effort）
-    - cron: '17 1 * * *'
+    # UTC 16:58 = 北京时间 00:58；五个项目错峰，避开 UTC 00~02 调度高峰
+    - cron: '58 16 * * *'
   workflow_dispatch:
     inputs:
       check_only:
