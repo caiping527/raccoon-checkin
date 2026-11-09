@@ -9,11 +9,14 @@ import sys
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, ROOT)
 
 import raccoon_checkin as rc  # noqa: E402
 import wecom_notify as wn  # noqa: E402
 import summarize_result as sr  # noqa: E402
+import update as up  # noqa: E402
 
 
 def make_jwt(payload):
@@ -207,6 +210,69 @@ class TestOwnership(unittest.TestCase):
             r = {"detail": {}}
             self.assertFalse(rc.check_ownership(r, t))
         self.assertIn("归属不符", r["message"])
+
+
+class TestPhoneLabel(unittest.TestCase):
+    def test_masked_phone_tail(self):
+        payload = {"code": "OK", "data": {"user": {
+            "phone": "134****4060", "name": "RaccoonJoshua"}}}
+        with mock.patch.object(up.urllib.request, "urlopen") as m:
+            m.return_value.__enter__.return_value.read.return_value = \
+                json.dumps(payload).encode()
+            tail, name, err = up.fetch_phone_tail("fake")
+        self.assertEqual((tail, name, err), ("4060", "RaccoonJoshua", None))
+
+    def test_full_phone_tail(self):
+        payload = {"data": {"user": {"phone": "13812345678"}}}
+        with mock.patch.object(up.urllib.request, "urlopen") as m:
+            m.return_value.__enter__.return_value.read.return_value = \
+                json.dumps(payload).encode()
+            self.assertEqual(up.fetch_phone_tail("fake")[0], "5678")
+
+    def test_missing_phone_is_error(self):
+        with mock.patch.object(up.urllib.request, "urlopen") as m:
+            m.return_value.__enter__.return_value.read.return_value = \
+                json.dumps({"data": {"user": {}}}).encode()
+            tail, _, err = up.fetch_phone_tail("fake")
+        self.assertIsNone(tail)
+        self.assertIn("未返回手机号", err)
+
+    def test_label_map_and_save_are_idempotent(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "账号标签.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("# 注释\n7080=4060\n")
+            with mock.patch.object(up, "LABEL_FILE", path):
+                self.assertEqual(up.load_label_map(), {"7080": "4060"})
+                up.save_label("7080", "4060")
+                up.save_label("9999", "1234")
+                self.assertEqual(up.load_label_map(), {"7080": "4060", "9999": "1234"})
+                with open(path, encoding="utf-8") as f:
+                    self.assertIn("# 注释", f.read())
+
+    def test_label_is_4_digits_only(self):
+        self.assertEqual(up.validate_label("4060"), "4060")
+        self.assertIsNone(up.validate_label("abc"))
+        self.assertIsNone(up.validate_label("406"))
+
+
+class TestNotifyNeverLeaksInternalId(unittest.TestCase):
+    def test_ownership_failure_message_has_no_internal_tail(self):
+        t = make_jwt({"sub": "internal-9999", "exp": 1796791687})
+        with mock.patch.object(rc, "INTERNAL_ID", "7080"), \
+                mock.patch.object(rc, "LABEL", "手机号尾号4060"):
+            r = {"detail": {}}
+            self.assertFalse(rc.check_ownership(r, t))
+        self.assertNotIn("9999", r["message"])
+        self.assertNotIn("7080", r["message"])
+
+    def test_push_text_shows_phone_label(self):
+        os.environ.pop("RACCOON_RUN_URL", None)
+        text = wn.build_text({"account": "手机号尾号4060", "status": "error",
+                              "message": "登录动作触发失败"}, "❌ 签到失败")
+        self.assertIn("手机号尾号4060", text)
+        self.assertNotIn("7080", text)
 
 
 if __name__ == "__main__":

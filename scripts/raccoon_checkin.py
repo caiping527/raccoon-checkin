@@ -270,13 +270,10 @@ def check_ownership(result, token):
     result["detail"]["account_tail"] = tail
     if not tail:
         return True
-    if INTERNAL_ID:
-        if INTERNAL_ID != tail:
-            result["message"] = ("凭据归属不符：令牌内部ID尾号 %s 与环境登记 %s 不一致，已中止"
-                                 % (tail, INTERNAL_ID))
-            return False
-    elif LABEL and tail not in LABEL:
-        result["message"] = "凭据归属不符：令牌尾号 %s 与账号 %s 不一致，已中止" % (tail, LABEL)
+    if INTERNAL_ID and INTERNAL_ID != tail:
+        # 该消息会进企业微信推送，不写任何内部ID尾号
+        result["message"] = ("凭据归属不符：令牌属于另一个账号，已中止"
+                             "（请重新登录该账号并双击「一键更新.bat」）")
         return False
     return True
 

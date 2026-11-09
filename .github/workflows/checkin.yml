@@ -58,7 +58,7 @@ jobs:
           echo "已登记账号数：$n"
 
   checkin:
-    name: 执行签到 · 尾号${{ matrix.tail }}
+    name: 执行签到 · 手机号尾号${{ matrix.tail }}
     needs: prepare_accounts
     if: ${{ needs.prepare_accounts.outputs.count != '0' }}
     runs-on: ubuntu-latest
@@ -73,7 +73,7 @@ jobs:
       RACCOON_ACCESS_TOKEN: ${{ secrets.RACCOON_ACCESS_TOKEN }}
       RACCOON_REFRESH_TOKEN: ${{ secrets.RACCOON_REFRESH_TOKEN }}
       RACCOON_ACCOUNT_ID: ${{ secrets.RACCOON_ACCOUNT_ID }}
-      RACCOON_ACCOUNT_LABEL: '尾号${{ matrix.tail }}'
+      RACCOON_ACCOUNT_LABEL: '手机号尾号${{ matrix.tail }}'
       # 通知通道（仓库级 Secret，所有账号共用；任一为空则跳过该通道）
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       WECOM_APP: ${{ secrets.WECOM_APP }}
@@ -121,7 +121,7 @@ jobs:
       - name: 输出运行摘要
         if: always()
         run: |
-          echo "### 小浣熊签到 · 尾号${{ matrix.tail }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 小浣熊签到 · 手机号尾号${{ matrix.tail }}" >> "$GITHUB_STEP_SUMMARY"
           python scripts/summarize_result.py result.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: 企业微信通知（失败 / 令牌临期）
@@ -151,5 +151,5 @@ jobs:
       - name: 失败时标记任务
         if: ${{ always() && (steps.diagnose.outcome != 'success' || steps.checkin.outcome == 'failure') }}
         run: |
-          echo "::error::尾号${{ matrix.tail }} 签到未成功，请查看上方日志与运行摘要"
+          echo "::error::手机号尾号${{ matrix.tail }} 签到未成功，请查看上方日志与运行摘要"
           exit 1
