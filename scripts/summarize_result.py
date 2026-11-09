@@ -36,6 +36,23 @@ def main():
     for key in ("available_points", "daily_points", "reward_points", "monthly_points"):
         if balance.get(key) is not None:
             print("| balance.%s | %s |" % (key, str(balance[key]).replace("|", "\\|")))
+    expiry = detail.get("expiry") or {}
+    if expiry:
+        print("")
+        print("#### 积分过期分布（逐笔入账）")
+        print("")
+        print("| 到期日 | 积分 | 笔数 | 剩余天数 |")
+        print("| --- | --- | --- | --- |")
+        for bucket in expiry.get("buckets") or []:
+            print("| %s | %s | %s | %s |" % (
+                bucket.get("expire_date"), bucket.get("points"),
+                bucket.get("count"), bucket.get("days_left")))
+        print("")
+        print("- 近 %s 天内到期合计：**%s 分**；当前每日积分余额：%s" % (
+            expiry.get("warn_days"), expiry.get("soon_points"),
+            balance.get("daily_points") if balance else expiry.get("daily_points_now")))
+        if expiry.get("unknown_expiry"):
+            print("- 另有 %s 笔入账无过期时间字段，未纳入统计" % expiry["unknown_expiry"])
     return 0
 
 

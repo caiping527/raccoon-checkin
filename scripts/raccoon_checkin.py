@@ -59,8 +59,14 @@ HTTP_RETRIES = int(os.environ.get("RACCOON_HTTP_RETRIES") or "2")
 RETRY_BACKOFF = float(os.environ.get("RACCOON_RETRY_BACKOFF") or "1")
 RECHECK_DELAY = float(os.environ.get("RACCOON_RECHECK_DELAY") or "2")
 
+# 积分临期检测：账本每笔发放都带过期时间，逐笔统计才能知道「哪天有分要作废」
+EXPIRY_KEYS = ("expire_at", "expire_time", "expired_at", "valid_until", "expireAt")
+POINTS_KEYS = ("points", "point", "amount", "value")
+EXPIRE_WARN_DAYS = float(os.environ.get("RACCOON_EXPIRE_WARN_DAYS") or "2")
+
 # 本次运行的会话状态：Cookie 与确认结果只在内存，绝不写进 result.json / 企微文案
-SESSION = {"cookie": "", "confirm": None, "confirm_auto": False, "network_retries": 0}
+SESSION = {"cookie": "", "confirm": None, "confirm_auto": False,
+           "network_retries": 0, "bills": []}
 
 RESULT_FILE = os.environ.get("RACCOON_RESULT_FILE") or "result.json"
 ROTATED_FILE = os.environ.get("RACCOON_ROTATED_FILE") or "raccoon-rotated.env"
@@ -248,6 +254,8 @@ def read_bills(token):
     items = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(items, list):
         return None, "账本响应缺少 items"
+    # 保留全量明细：签到判定只用第一条 daily_grant，临期分析要用所有记录
+    SESSION["bills"] = items
     for item in items:
         if isinstance(item, dict) and item.get("biz_type") == "daily_grant":
             return item, None
@@ -264,6 +272,113 @@ def read_balance(token):
         return None, "余额响应格式异常"
     keys = ("available_points", "daily_points", "reward_points", "monthly_points")
     return {k: payload.get(k) for k in keys if k in payload}, None
+
+
+def _first(item, keys):
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, "", 0):
+            return value
+    return None
+
+
+def parse_expiry(value):
+    """过期时间兼容 ISO 字符串与 Unix 秒/毫秒时间戳，统一转北京时间。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e11:
+            ts /= 1000.0
+        try:
+            return datetime.fromtimestamp(ts, BEIJING)
+        except (ValueError, OSError, OverflowError):
+            return None
+    return parse_dt(value)
+
+
+def analyze_expiry(items, today, warn_days=None):
+    """逐笔统计积分的过期日，返回脱敏白名单结构。
+
+    只统计带过期时间的「入账」记录（points > 0）；扣减/消费记录不参与。
+    账本不提供逐笔剩余额，因此这里统计的是「发放时的过期分布」，
+    是否已被消耗由 balance.daily_points 在推荐阶段校正。
+    """
+    warn = EXPIRE_WARN_DAYS if warn_days is None else float(warn_days)
+    try:
+        base_day = datetime.strptime(today, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        base_day = datetime.now(BEIJING).date()
+    buckets = {}
+    rows = []
+    unknown = 0
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            points = float(_first(item, POINTS_KEYS))
+        except (TypeError, ValueError):
+            points = 0.0
+        if points <= 0:
+            continue
+        exp = parse_expiry(_first(item, EXPIRY_KEYS))
+        if not exp:
+            unknown += 1
+            continue
+        day = exp.astimezone(BEIJING).date()
+        key = day.isoformat()
+        days_left = (day - base_day).days
+        bucket = buckets.setdefault(key, {
+            "expire_date": key, "points": 0.0, "count": 0, "days_left": days_left})
+        bucket["points"] += points
+        bucket["count"] += 1
+        rows.append({
+            "biz_type": str(item.get("biz_type") or item.get("type") or "-"),
+            "created_at": str(item.get("created_at") or "")[:10],
+            "expire_date": key, "points": points, "days_left": days_left,
+        })
+    ordered = sorted(buckets.values(), key=lambda b: b["expire_date"])
+    for bucket in ordered:
+        bucket["points"] = round(bucket["points"], 2)
+    # 账本会保留历史记录，已过期的只单独统计，不参与「最近到期 / 临期」口径
+    active = [b for b in ordered if b["days_left"] >= 0]
+    soon = [b for b in active if b["days_left"] <= warn]
+    return {
+        "today": today,
+        "warn_days": warn,
+        "records": len(rows),
+        "unknown_expiry": unknown,
+        "buckets": ordered,
+        "rows": rows[:40],
+        "active_buckets": active,
+        "expired_points": round(sum(b["points"] for b in ordered if b["days_left"] < 0), 2),
+        "soon_points": round(sum(b["points"] for b in soon), 2),
+        "nearest_expire_date": active[0]["expire_date"] if active else None,
+        "nearest_days_left": active[0]["days_left"] if active else None,
+    }
+
+
+def attach_expiry(result, today):
+    """把临期分析写进 result.json，并打印白名单明细到日志（不含令牌/内部ID）。"""
+    items = SESSION.get("bills") or []
+    if not items:
+        return
+    expiry = analyze_expiry(items, today)
+    result["detail"]["expiry"] = expiry
+    if isinstance(items[0], dict):
+        print("  账本字段名：%s" % ",".join(sorted(str(k) for k in items[0])[:30]))
+    print("  [积分临期] 带过期时间入账 %d 笔；最近 %s 到期（剩 %s 天）；%g 天内到期合计 %g 分"
+          % (expiry["records"], expiry["nearest_expire_date"] or "未知",
+             expiry["nearest_days_left"] if expiry["nearest_days_left"] is not None else "?",
+             expiry["warn_days"], expiry["soon_points"]))
+    for bucket in (expiry["active_buckets"] or expiry["buckets"])[:12]:
+        print("    · %s 到期 %g 分（%d 笔，剩 %d 天）"
+              % (bucket["expire_date"], bucket["points"],
+                 bucket["count"], bucket["days_left"]))
+    balance = ((result.get("detail") or {}).get("balance") or {})
+    if balance:
+        result["detail"]["expiry"]["daily_points_now"] = balance.get("daily_points")
+        print("  [积分临期] 当前每日积分余额 daily_points=%s" % balance.get("daily_points"))
 
 
 def attach_balance(result, token):
@@ -401,6 +516,7 @@ def diagnose(token):
         k: grant.get(k) for k in ("created_at", "grant_at", "expire_at", "points")
     } if grant else None
     attach_balance(result, token)
+    attach_expiry(result, beijing_today())
     write_result(result)
     print(result["message"])
     return 0
@@ -556,6 +672,7 @@ def run():
     result["message"] = message
     result["status"] = "ok" if ok else "error"
     attach_balance(result, at)
+    attach_expiry(result, today)
     write_rotated(rotated_pairs)
     write_result(result)
     print("[%s] %s" % (LABEL, message))
