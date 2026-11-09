@@ -358,6 +358,41 @@ def analyze_expiry(items, today, warn_days=None):
     }
 
 
+def remaining_by_expiry(active_buckets, daily_points, warn_days):
+    """按 FIFO（最早到期的先被花掉）把当前余额摊回各到期桶。
+
+    账本只记发放流水，不记逐笔消耗；balance.daily_points 才是当下真正还握着的
+    每日积分。两者之差即累计消耗/失效额，从最早的到期桶开始扣，剩下的
+    才是「快过期且没花掉」的分 —— 直接按发放额算会把早已花光的号误报成临期。
+    """
+    buckets = [b for b in (active_buckets or []) if b.get("days_left", -1) >= 0]
+    total = sum(float(b.get("points") or 0) for b in buckets)
+    try:
+        held = float(daily_points)
+    except (TypeError, ValueError):
+        held = total
+    held = max(0.0, min(held, total))
+    consumed = total - held
+    distribution = []
+    for b in buckets:
+        amount = float(b.get("points") or 0)
+        left = max(0.0, amount - consumed)
+        consumed = max(0.0, consumed - amount)
+        distribution.append({
+            "expire_date": b["expire_date"], "days_left": b["days_left"],
+            "granted": round(amount, 2), "remaining": round(left, 2),
+        })
+    soon = [x for x in distribution if x["days_left"] <= warn_days and x["remaining"] > 0]
+    nearest = next((x for x in distribution if x["remaining"] > 0), None)
+    return {
+        "distribution": distribution,
+        "soon_remaining": round(sum(x["remaining"] for x in soon), 2),
+        "nearest_remaining": nearest,
+        "held_daily_points": round(held, 2),
+        "granted_active_points": round(total, 2),
+    }
+
+
 def attach_expiry(result, today):
     """把临期分析写进 result.json，并打印白名单明细到日志（不含令牌/内部ID）。"""
     items = SESSION.get("bills") or []
@@ -372,13 +407,23 @@ def attach_expiry(result, today):
              expiry["nearest_days_left"] if expiry["nearest_days_left"] is not None else "?",
              expiry["warn_days"], expiry["soon_points"]))
     for bucket in (expiry["active_buckets"] or expiry["buckets"])[:12]:
-        print("    · %s 到期 %g 分（%d 笔，剩 %d 天）"
+        print("    · %s 到期发放 %g 分（%d 笔，剩 %d 天）"
               % (bucket["expire_date"], bucket["points"],
                  bucket["count"], bucket["days_left"]))
+    for row in expiry["rows"][:6]:
+        print("    [账本明细] %s %s +%g 分 → %s（剩 %d 天）"
+              % (row["created_at"], row["biz_type"], row["points"],
+                 row["expire_date"], row["days_left"]))
     balance = ((result.get("detail") or {}).get("balance") or {})
-    if balance:
-        result["detail"]["expiry"]["daily_points_now"] = balance.get("daily_points")
-        print("  [积分临期] 当前每日积分余额 daily_points=%s" % balance.get("daily_points"))
+    daily = balance.get("daily_points")
+    corrected = remaining_by_expiry(expiry["active_buckets"], daily, expiry["warn_days"])
+    expiry.update(corrected)
+    print("  [积分临期] 每日积分余额 %s；按最早到期先扣后，%g 天内真正待过期 %g 分"
+          % (daily, expiry["warn_days"], expiry["soon_remaining"]))
+    for row in corrected["distribution"][:12]:
+        if row["remaining"] > 0:
+            print("    ★ %s 未用 %g 分（剩 %d 天）"
+                  % (row["expire_date"], row["remaining"], row["days_left"]))
 
 
 def attach_balance(result, token):

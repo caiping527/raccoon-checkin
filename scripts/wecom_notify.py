@@ -108,14 +108,7 @@ def push_app(value, text):
     return "app:" + " ".join(bits)
 
 
-def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "result.json"
-    result = load_result(path)
-    title = decide(result)
-    if not title:
-        print("本次无需推送（签到成功且令牌未临期）")
-        return 0
-    text = build_text(result, title)
+def push_all(text):
     channels = []
     webhook = (os.environ.get("WECOM_WEBHOOK") or "").strip()
     app = (os.environ.get("WECOM_APP") or "").strip()
@@ -131,7 +124,110 @@ def main():
             channels.append("app异常:%s" % type(e).__name__)
     if not channels:
         channels.append("未配置通知通道，仅打印：\n" + text)
-    print("[%s] %s" % (title, " | ".join(channels)))
+    return channels
+
+
+def recommend_rows(root):
+    """读取各账号 result.json，按「临期且未用积分」从多到少排序。"""
+    import glob
+    rows = []
+    for path in sorted(glob.glob(os.path.join(root, "**", "result.json"), recursive=True)):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        expiry = (data.get("detail") or {}).get("expiry") or {}
+        if not expiry:
+            continue
+        nearest = expiry.get("nearest_remaining") or {}
+        try:
+            soon = float(expiry.get("soon_remaining") or 0)
+        except (TypeError, ValueError):
+            soon = 0.0
+        rows.append({
+            "account": str(data.get("account") or "未命名账号"),
+            "soon": round(soon, 2),
+            "held": expiry.get("held_daily_points"),
+            "warn": expiry.get("warn_days"),
+            "nearest_date": nearest.get("expire_date") or expiry.get("nearest_expire_date"),
+            "nearest_days": (nearest.get("days_left") if nearest
+                             else expiry.get("nearest_days_left")),
+        })
+    rows.sort(key=lambda r: (-r["soon"],
+                             r["nearest_days"] if isinstance(r["nearest_days"], (int, float))
+                             else 999,
+                             r["account"]))
+    return rows
+
+
+def build_report(rows):
+    """Markdown 榜单，写入 Actions Summary。"""
+    if not rows:
+        return "#### 今日积分优先用号\n\n- 本次没有可用的积分账本数据。\n"
+    warn = rows[0].get("warn") or 2
+    lines = ["#### 今日积分优先用号（按临期未用积分从多到少排序）", "",
+             "| 排名 | 账号 | %g 天内待过期且未用 | 最近到期 | 每日积分余额 |" % warn,
+             "| --- | --- | --- | --- | --- |"]
+    for i, r in enumerate(rows, 1):
+        lines.append("| %d | %s | **%g 分** | %s（剩 %s 天） | %s |" % (
+            i, r["account"], r["soon"], r["nearest_date"] or "-",
+            r["nearest_days"] if r["nearest_days"] is not None else "-", r["held"]))
+    lines.append("")
+    if rows[0]["soon"] > 0:
+        lines.append("**建议：今天优先用 %s 跑代码**，可先消耗 %g 分（%s 天后到期）。"
+                     % (rows[0]["account"], rows[0]["soon"], rows[0]["nearest_days"]))
+        if sum(1 for r in rows if r["soon"] > 0) > 1:
+            lines.append("")
+            lines.append("多个号都有临期积分：按上表顺序依次使用，积分多的先用。")
+    else:
+        lines.append("当前没有账号有临期积分，无需特意切换账号。")
+    return "\n".join(lines) + "\n"
+
+
+def build_recommend_text(rows, run_url=None):
+    """企微纯文本榜单（不用 Markdown 符号，手机上看得清）。"""
+    lines = ["【今日积分优先用号】按待过期积分从多到少："]
+    for i, r in enumerate(rows, 1):
+        lines.append("%d. %s：待过期 %g 分，最近 %s（剩 %s 天），余额 %s 分" % (
+            i, r["account"], r["soon"], r["nearest_date"] or "未知",
+            r["nearest_days"] if r["nearest_days"] is not None else "?",
+            r["held"] if r["held"] is not None else "?"))
+    if rows[0]["soon"] > 0:
+        lines.append("建议：今天优先用 %s 跑代码，积分多的先用，别浪费。" % rows[0]["account"])
+    else:
+        lines.append("今天没有临期积分，不用特意切号。")
+    if run_url:
+        lines.append("运行详情：%s" % run_url)
+    return "\n".join(lines)
+
+
+def recommend_main(root):
+    rows = recommend_rows(root)
+    print(build_report(rows))
+    policy = str(os.environ.get("RECOMMEND_NOTIFY") or "auto").strip().lower()
+    has_soon = any(r["soon"] > 0 for r in rows)
+    if not rows or policy in ("0", "off", "false", "no", "none", "disabled"):
+        print("推荐通知：已跳过（无数据或已关闭）")
+        return 0
+    if policy not in ("1", "true", "yes", "on", "always") and not has_soon:
+        print("推荐通知：本次无临期积分，按「不打扰」策略不推送")
+        return 0
+    text = build_recommend_text(rows, os.environ.get("RACCOON_RUN_URL"))
+    print("推荐通知：%s" % " | ".join(push_all(text)))
+    return 0
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--recommend":
+        return recommend_main(sys.argv[2])
+    path = sys.argv[1] if len(sys.argv) > 1 else "result.json"
+    result = load_result(path)
+    title = decide(result)
+    if not title:
+        print("本次无需推送（签到成功且令牌未临期）")
+        return 0
+    print("[%s] %s" % (title, " | ".join(push_all(build_text(result, title)))))
     return 0
 
 
