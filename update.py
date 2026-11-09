@@ -175,7 +175,7 @@ def save_label(internal_tail, phone_tail):
     if not replaced:
         out.append("%s=%s" % (internal_tail, phone_tail))
     try:
-        with open(LABEL_FILE, "w", encoding="utf-8") as f:
+        with open(LABEL_FILE, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(out).rstrip() + "\n")
         return True
     except Exception:
