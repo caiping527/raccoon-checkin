@@ -66,7 +66,7 @@ EXPIRE_WARN_DAYS = float(os.environ.get("RACCOON_EXPIRE_WARN_DAYS") or "2")
 
 # 本次运行的会话状态：Cookie 与确认结果只在内存，绝不写进 result.json / 企微文案
 SESSION = {"cookie": "", "confirm": None, "confirm_auto": False,
-           "network_retries": 0, "bills": []}
+           "network_retries": 0, "bills": [], "balance_raw": {}}
 
 RESULT_FILE = os.environ.get("RACCOON_RESULT_FILE") or "result.json"
 ROTATED_FILE = os.environ.get("RACCOON_ROTATED_FILE") or "raccoon-rotated.env"
@@ -270,6 +270,12 @@ def read_balance(token):
     payload = data.get("data") or {}
     if not isinstance(payload, dict):
         return None, "余额响应格式异常"
+    # 保留全部标量字段（仅数值/短字符串），便于核对奖励积分是否另有过期时间
+    SESSION["balance_raw"] = {
+        k: v for k, v in payload.items()
+        if isinstance(v, (int, float, str)) and not isinstance(v, bool)
+        and len(str(k)) <= 60 and len(str(v)) <= 120
+    }
     keys = ("available_points", "daily_points", "reward_points", "monthly_points")
     return {k: payload.get(k) for k in keys if k in payload}, None
 
@@ -311,10 +317,18 @@ def analyze_expiry(items, today, warn_days=None):
         base_day = datetime.now(BEIJING).date()
     buckets = {}
     rows = []
+    all_rows = []
     unknown = 0
     for item in items or []:
         if not isinstance(item, dict):
             continue
+        all_rows.append({
+            "biz_type": str(item.get("biz_type") or "-"),
+            "event_name": str(item.get("event_name") or "-"),
+            "created_at": str(item.get("created_at") or "")[:19],
+            "points": item.get("points"),
+            "expire_at": str(_first(item, EXPIRY_KEYS) or ""),
+        })
         try:
             points = float(_first(item, POINTS_KEYS))
         except (TypeError, ValueError):
@@ -350,6 +364,7 @@ def analyze_expiry(items, today, warn_days=None):
         "unknown_expiry": unknown,
         "buckets": ordered,
         "rows": rows[:40],
+        "all_rows": all_rows[:60],
         "active_buckets": active,
         "expired_points": round(sum(b["points"] for b in ordered if b["days_left"] < 0), 2),
         "soon_points": round(sum(b["points"] for b in soon), 2),
@@ -414,12 +429,25 @@ def attach_expiry(result, today):
         print("    [账本明细] %s %s +%g 分 → %s（剩 %d 天）"
               % (row["created_at"], row["biz_type"], row["points"],
                  row["expire_date"], row["days_left"]))
+    raw_balance = ((result.get("detail") or {}).get("balance_raw") or {})
+    if raw_balance:
+        print("  [余额全字段] %s" % json.dumps(raw_balance, ensure_ascii=False)[:400])
+    shown = 0
+    for row in expiry["all_rows"]:
+        if shown >= 12:
+            break
+        if row["expire_at"] or not isinstance(row["points"], (int, float)) or row["points"] <= 0:
+            continue
+        print("    [无过期字段入账] %s %s +%g 分 (%s)"
+              % (row["created_at"], row["biz_type"], row["points"], row["event_name"]))
+        shown += 1
     balance = ((result.get("detail") or {}).get("balance") or {})
     daily = balance.get("daily_points")
     corrected = remaining_by_expiry(expiry["active_buckets"], daily, expiry["warn_days"])
     expiry.update(corrected)
-    print("  [积分临期] 每日积分余额 %s；按最早到期先扣后，%g 天内真正待过期 %g 分"
-          % (daily, expiry["warn_days"], expiry["soon_remaining"]))
+    print("  [积分临期] 总可用 %s 分 / 会过期的每日签到类 %s 分；按最早到期先扣后，%g 天内真正待过期 %g 分"
+          % (balance.get("available_points"), daily,
+             expiry["warn_days"], expiry["soon_remaining"]))
     for row in corrected["distribution"][:12]:
         if row["remaining"] > 0:
             print("    ★ %s 未用 %g 分（剩 %d 天）"
@@ -431,6 +459,8 @@ def attach_balance(result, token):
     balance, err = read_balance(token)
     if balance:
         result["detail"]["balance"] = balance
+        if SESSION.get("balance_raw"):
+            result["detail"]["balance_raw"] = SESSION["balance_raw"]
     elif err:
         result["detail"]["balance_error"] = err
 
