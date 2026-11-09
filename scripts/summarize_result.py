@@ -51,14 +51,17 @@ def main():
         print("- 近 %s 天内到期发放 %s 分；**扣掉已花掉的后真正待过期：%s 分**" % (
             expiry.get("warn_days"), expiry.get("soon_points"),
             expiry.get("soon_remaining")))
-        print("- 当前每日积分余额：%s（账本未过期发放合计 %s 分）" % (
-            expiry.get("held_daily_points"), expiry.get("granted_active_points")))
+        print("- 当前余额：签到类 %s 分 / 奖励类 %s 分；已标注到期日的未过期发放合计 %s 分" % (
+            expiry.get("held_daily_points"), expiry.get("held_reward_points"),
+            expiry.get("granted_active_points")))
         for row in expiry.get("distribution") or []:
             if row.get("remaining", 0) > 0:
                 print("- %s 到期：发放 %s 分 / **未用 %s 分**（剩 %s 天）" % (
                     row["expire_date"], row["granted"], row["remaining"], row["days_left"]))
+        if expiry.get("dated_by_event_name"):
+            print("- 其中 %s 笔的到期日来自 event_name 文本（奖励积分）" % expiry["dated_by_event_name"])
         if expiry.get("unknown_expiry"):
-            print("- 另有 %s 笔入账无过期时间字段，未纳入统计" % expiry["unknown_expiry"])
+            print("- 另有 %s 笔奖励入账未标注到期日，暂无法判断过期" % expiry["unknown_expiry"])
     return 0
 
 

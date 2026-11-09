@@ -153,14 +153,23 @@ def recommend_rows(root):
         except (TypeError, ValueError):
             total = 0.0
         try:
-            daily = float(expiry.get("held_daily_points") or 0)
+            daily = float(expiry.get("held_daily_points")
+                          if expiry.get("held_daily_points") is not None
+                          else balance.get("daily_points") or 0)
         except (TypeError, ValueError):
             daily = 0.0
+        try:
+            reward = float(expiry.get("held_reward_points")
+                           if expiry.get("held_reward_points") is not None
+                           else balance.get("reward_points") or 0)
+        except (TypeError, ValueError):
+            reward = 0.0
         rows.append({
             "account": str(data.get("account") or "未命名账号"),
             "soon": round(soon, 2),
             "held": round(total, 2),        # 客户端显示的总可用积分
             "daily": round(daily, 2),       # 其中会过期的每日签到积分
+            "reward": round(reward, 2),
             "warn": expiry.get("warn_days"),
             "nearest_date": nearest.get("expire_date"),
             "nearest_days": nearest.get("days_left"),
@@ -180,16 +189,17 @@ def build_report(rows):
         return "#### 今日积分优先用号\n\n- 本次没有可用的积分账本数据。\n"
     warn = rows[0].get("warn") or 2
     lines = ["#### 今日积分优先用号（按临期未用积分从多到少排序）", "",
-             "| 排名 | 账号 | %g 天内待过期且未用 | 最近到期 | 总可用积分 | 其中会过期的签到积分 |" % warn,
-             "| --- | --- | --- | --- | --- | --- |"]
+             "| 排名 | 账号 | %g 天内待过期且未用 | 最近到期 | 总可用积分 | 签到积分 | 奖励积分 |" % warn,
+             "| --- | --- | --- | --- | --- | --- | --- |"]
     for i, r in enumerate(rows, 1):
         nearest = ("%s（剩 %s 天）" % (r["nearest_date"], r["nearest_days"])
                    if r["nearest_date"] and r["nearest_days"] is not None else "暂无待用批次")
-        lines.append("| %d | %s | **%g 分** | %s | %g | %g |" % (
-            i, r["account"], r["soon"], nearest, r["held"], r["daily"]))
+        lines.append("| %d | %s | **%g 分** | %s | %g | %g | %g |" % (
+            i, r["account"], r["soon"], nearest, r["held"], r["daily"], r["reward"]))
     lines.append("")
-    lines.append("> 总可用积分 = 每日签到积分 + 奖励积分；账本里只有每日签到积分带过期日，"
-                 "奖励积分未见过期字段，因此临期统计只针对签到积分。")
+    lines.append("> 总可用积分 = 签到积分 + 奖励积分。到期日来自 expire_at 字段（每日签到）"
+                 "与 event_name 文本（部分奖励，如「2027-10-19 到期」）；"
+                 "未标注到期日的奖励积分暂无法判断过期。")
     lines.append("")
     if rows[0]["soon"] > 0:
         lines.append("**建议：今天优先用 %s 跑代码**，可先消耗 %g 分（%s 天后到期）。"
@@ -214,7 +224,7 @@ def build_recommend_text(rows, run_url=None):
         lines.append("建议：今天优先用 %s 跑代码，积分多的先用，别浪费。" % rows[0]["account"])
     else:
         lines.append("今天没有临期积分，不用特意切号。")
-    lines.append("注：会过期的是每日签到积分；奖励积分未见过期字段。")
+    lines.append("注：签到积分有明确到期日；部分奖励积分的到期日写在发放说明里。")
     if run_url:
         lines.append("运行详情：%s" % run_url)
     return "\n".join(lines)
