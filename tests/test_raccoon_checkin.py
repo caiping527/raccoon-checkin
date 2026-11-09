@@ -275,5 +275,35 @@ class TestNotifyNeverLeaksInternalId(unittest.TestCase):
         self.assertNotIn("7080", text)
 
 
+class TestPushAppDiagnostics(unittest.TestCase):
+    """企微 message/send 返回 invaliduser 时 errcode 仍为 0，日志必须能看出来。"""
+
+    class _FakeTokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"errcode":0,"errmsg":"ok","access_token":"FAKE"}'
+
+    def _push(self, reply):
+        with mock.patch.object(wn.urllib.request, "urlopen",
+                               return_value=self._FakeTokenResponse()), \
+                mock.patch.object(wn, "post_json", return_value=reply):
+            return wn.push_app("corpid,secret,@all,1000002", "测试")
+
+    def test_success_logs_msgid(self):
+        out = self._push({"errcode": 0, "errmsg": "ok", "msgid": "MSG123"})
+        self.assertIn("errcode=0", out)
+        self.assertIn("msgid=MSG123", out)
+        self.assertNotIn("invaliduser", out)
+
+    def test_invaliduser_is_visible(self):
+        out = self._push({"errcode": 0, "errmsg": "ok", "invaliduser": "@all"})
+        self.assertIn("invaliduser=@all", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -97,7 +97,15 @@ def push_app(value, text):
         "touser": touser, "msgtype": "text", "agentid": agentid,
         "text": {"content": text}, "safe": 0,
     })
-    return "app:%s" % (r.get("errmsg") or r.get("errcode"))
+    # 企微 message/send 在「无人可见」时 errcode 仍为 0，只回 invaliduser；
+    # 把完整投递结果打进日志，避免出现「app:ok 但手机没收到」的假阳性。
+    bits = ["errcode=%s" % r.get("errcode"),
+            "errmsg=%s" % (r.get("errmsg") or "-")]
+    if r.get("invaliduser"):
+        bits.append("invaliduser=%s" % r["invaliduser"])
+    if r.get("msgid"):
+        bits.append("msgid=%s" % r["msgid"])
+    return "app:" + " ".join(bits)
 
 
 def main():
