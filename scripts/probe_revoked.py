@@ -83,6 +83,17 @@ def main():
         s2, t2 = http(BASE + "/api/web/points/v1/balance", headers={
             "Accept": "application/json", "Authorization": "Bearer " + at})
         print("[诊断]    用新令牌打 balance -> HTTP %s %s" % (s2, code_of(t2)))
+
+    # 试探服务端是否按客户端平台 / UA 隔离会话：若隔离，换头即可让旧令牌复活
+    for platform in ("", "web", "desktop-macos", "desktop-linux", "mobile-ios"):
+        headers = dict(auth)
+        headers["User-Agent"] = "raccoon-probe/1.0"
+        if platform:
+            headers["X-Client-Platform"] = platform
+            headers["X-Client-Version"] = "v1.0.0"
+        s3, t3 = http(BASE + "/api/web/points/v1/balance", headers=headers)
+        print("[诊断] 3) balance(platform=%s) -> HTTP %s %s"
+              % (platform or "默认", s3, code_of(t3)))
     return 0
 
 
