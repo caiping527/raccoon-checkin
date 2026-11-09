@@ -98,6 +98,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: 诊断撤销令牌（仅调试开关启用时）
+        if: ${{ vars.RACCOON_DEBUG == '1' }}
+        run: python scripts/probe_revoked.py || true
+
       - name: 环境自检（只读）
         id: diagnose
         run: python scripts/raccoon_checkin.py --diagnose
