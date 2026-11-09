@@ -59,7 +59,7 @@ def build_text(result, title):
         lines.append("令牌到期：%s（剩余 %s 天）" % (
             result["token_expire_at"], result.get("token_days_left")))
     if title.startswith("⚠️"):
-        lines.append("处理：打开小浣熊客户端登录该账号，双击「一键更新.bat」")
+        lines.append("处理：双击「密码登录.bat」重新登记该账号（不用打开客户端）")
     run_url = os.environ.get("RACCOON_RUN_URL")
     if run_url:
         lines.append("运行详情：%s" % run_url)

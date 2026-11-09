@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""小浣熊签到 · 密码登录登记工具（双击根目录「密码登录.bat」运行）。
+"""小浣熊签到 · 唯一本机工具（双击根目录「密码登录.bat」运行）。
 
-与「一键更新.bat」的区别：
-  一键更新.bat 读取桌面客户端 auth.json 里的登录态 —— 客户端切号/退出登录会撤销会话，
-  导致云端 401。本工具改用官方「手机号 + 密码」接口直接换一张独立令牌，
-  完全不依赖桌面客户端，也不需要打开或退出小浣熊。
+用官方「手机号 + 密码」接口换一张独立令牌，完全不依赖桌面客户端，
+不需要打开或退出小浣熊；新增账号、改密码后重跑一次即可。
 
 流程：
   1. 本机输入手机号与密码（默认明文显示便于核对，可加 --hide-password 隐藏；
@@ -131,9 +129,6 @@ def main():
     internal_tail = digits[-4:] if len(digits) >= 4 else ""
     if not internal_tail:
         update.die("无法从令牌识别内部ID尾号", "请反馈给维护者（令牌解析异常）", target="密码登录")
-    if phone_tail:
-        update.save_label(internal_tail, phone_tail)
-
     env_name = "acct-%s" % label
     print("  识别账号：手机号尾号 %s%s（%s）" % (
         label, (" · " + nickname) if nickname else "", label_source))

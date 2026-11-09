@@ -5,7 +5,7 @@ name: 商汤小浣熊 每日登录动作
 # 账号体系：仓库变量 RACCOON_ACCOUNTS 里的每个标签 = 一个 Environment `acct-<标签>`，
 # 环境内存放该账号专属的 RACCOON_ACCESS_TOKEN（登录令牌）、
 # RACCOON_ACCOUNT_ID（内部ID尾号，防串号）、可选 RACCOON_REFRESH_TOKEN。
-# 新增账号：本机登录该账号 → 双击「一键更新.bat」，无需改本文件、无需上网页加 Secret。
+# 新增账号：本机双击「密码登录.bat」输入手机号+密码即可，无需改本文件、无需上网页加 Secret。
 
 on:
   schedule:
@@ -103,10 +103,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 诊断撤销令牌（仅调试开关启用时）
-        if: ${{ vars.RACCOON_DEBUG == '1' }}
-        run: python scripts/probe_revoked.py || true
-
       - name: 环境自检（只读）
         id: diagnose
         run: python scripts/raccoon_checkin.py --diagnose
@@ -147,7 +143,7 @@ jobs:
         run: |
           [ -s raccoon-rotated.env ] || exit 0
           if [ -z "$GH_PAT" ]; then
-            echo "::warning::令牌已轮换但未配置 GH_PAT Secret，请在本机运行「一键更新.bat」"
+            echo "::warning::令牌已轮换但未配置 GH_PAT Secret，请在本机运行「密码登录.bat」"
             exit 0
           fi
           while IFS='=' read -r name token; do

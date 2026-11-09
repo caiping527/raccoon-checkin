@@ -352,7 +352,7 @@ def check_ownership(result, token):
     if INTERNAL_ID and INTERNAL_ID != tail:
         # 该消息会进企业微信推送，不写任何内部ID尾号
         result["message"] = ("凭据归属不符：令牌属于另一个账号，已中止"
-                             "（请重新登录该账号并双击「一键更新.bat」）")
+                             "（请重新登录该账号并双击「密码登录.bat」）")
         return False
     return True
 
@@ -369,7 +369,7 @@ def diagnose(token):
         print(result["message"])
         return 1
     if days is not None and days <= 0:
-        result["message"] = "登录令牌已过期，请在本机运行「一键更新.bat」"
+        result["message"] = "登录令牌已过期，请在本机运行「密码登录.bat」"
         write_result(result)
         print(result["message"])
         return 1
@@ -492,7 +492,7 @@ def run():
         result["token_days_left"] = days
 
     if days is not None and days <= 0:
-        result["message"] = "登录令牌已过期，请在本机运行「一键更新.bat」"
+        result["message"] = "登录令牌已过期，请在本机运行「密码登录.bat」"
         write_rotated(rotated_pairs)
         write_result(result)
         print(result["message"])
