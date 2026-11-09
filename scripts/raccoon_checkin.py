@@ -296,7 +296,14 @@ def diagnose(token):
         return 1
     grant, err = read_bills(token)
     if err:
-        result["message"] = "账本只读查询失败：%s" % err
+        if "401" in err or "authorization_verify" in err:
+            result["detail"]["revoked"] = True
+            result["message"] = (
+                "登录会话已被服务端撤销(401)：客户端退出/重登该账号所致。"
+                "请用「安全换号.bat」走免登出流程重新登记，切勿在客户端点退出登录"
+            )
+        else:
+            result["message"] = "账本只读查询失败：%s" % err
         write_result(result)
         print(result["message"])
         return 1

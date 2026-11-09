@@ -305,5 +305,22 @@ class TestPushAppDiagnostics(unittest.TestCase):
         self.assertIn("invaliduser=@all", out)
 
 
+class TestRevokedTokenMessage(unittest.TestCase):
+    """服务端撤销会话时，推送文案必须给出可操作的免登出指引。"""
+
+    def test_401_is_actionable(self):
+        captured = {}
+        with mock.patch.object(rc, "read_bills",
+                               return_value=(None, "HTTP 401 authorization_verify_error")), \
+                mock.patch.object(rc, "check_ownership", return_value=True), \
+                mock.patch.object(rc, "token_meta", return_value=(20.0, "2026-12-09")), \
+                mock.patch.object(rc, "write_result", side_effect=lambda r: captured.update(r)):
+            code = rc.diagnose("fake")
+        self.assertEqual(code, 1)
+        self.assertIn("401", captured["message"])
+        self.assertIn("安全换号", captured["message"])
+        self.assertTrue(captured["detail"]["revoked"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
