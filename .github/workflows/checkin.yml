@@ -73,6 +73,9 @@ jobs:
       RACCOON_ACCESS_TOKEN: ${{ secrets.RACCOON_ACCESS_TOKEN }}
       RACCOON_REFRESH_TOKEN: ${{ secrets.RACCOON_REFRESH_TOKEN }}
       RACCOON_ACCOUNT_ID: ${{ secrets.RACCOON_ACCOUNT_ID }}
+      # 可选：配置后云端每次运行用密码现取独立会话，不受桌面客户端切号影响
+      RACCOON_PHONE: ${{ secrets.RACCOON_PHONE }}
+      RACCOON_PASSWORD: ${{ secrets.RACCOON_PASSWORD }}
       RACCOON_ACCOUNT_LABEL: '手机号尾号${{ matrix.tail }}'
       # 通知通道（仓库级 Secret，所有账号共用；任一为空则跳过该通道）
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
@@ -87,9 +90,11 @@ jobs:
       - name: 检查凭据是否已配置
         run: |
           if [ -n "$RACCOON_ACCESS_TOKEN" ] || [ -n "$RACCOON_REFRESH_TOKEN" ]; then
-            echo "✓ 凭据已配置（内容不外显）"
+            echo "✓ 令牌已配置（内容不外显）"
+          elif [ -n "$RACCOON_PHONE" ] && [ -n "$RACCOON_PASSWORD" ]; then
+            echo "✓ 密码登录已配置（内容不外显），本次运行将现取独立会话"
           else
-            echo "::error::环境 acct-${{ matrix.tail }} 未配置 RACCOON_ACCESS_TOKEN，请在本机登录该账号后双击「一键更新.bat」"
+            echo "::error::环境 acct-${{ matrix.tail }} 未配置凭据，请在本机双击「密码登录.bat」登记该账号"
             exit 1
           fi
 

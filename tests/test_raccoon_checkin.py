@@ -318,8 +318,92 @@ class TestRevokedTokenMessage(unittest.TestCase):
             code = rc.diagnose("fake")
         self.assertEqual(code, 1)
         self.assertIn("401", captured["message"])
-        self.assertIn("安全换号", captured["message"])
+        self.assertIn("密码登录", captured["message"])
         self.assertTrue(captured["detail"]["revoked"])
+
+
+class TestIamPasswordLogin(unittest.TestCase):
+    """官网同款 AES-128-CFB 加密 + 凭据不外泄（纯离线）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import iam_login as il
+        cls.il = il
+
+    def test_aes128_fips_vector(self):
+        il = self.il
+        key = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+        pt = bytes.fromhex("00112233445566778899aabbccddeeff")
+        rk, nr = il._expand_key(key)
+        self.assertEqual(il._encrypt_block(list(pt), rk, nr).hex(),
+                         "69c4e0d86a7b0430d8cdb78070b4c55a")
+
+    def test_encrypt_credential_shape_and_no_plaintext(self):
+        il = self.il
+        plain = "13400000000"
+        blob = base64.b64decode(il.encrypt_credential(plain))
+        self.assertEqual(len(blob), 16 + len(plain.encode()))  # IV + 等长密文
+        self.assertNotIn(plain.encode(), blob)
+
+    def test_random_iv(self):
+        self.assertNotEqual(self.il.encrypt_credential("abc"),
+                            self.il.encrypt_credential("abc"))
+
+    def test_login_request_contains_no_plaintext(self):
+        il = self.il
+        captured = {}
+
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return b'{"access_token":"eyJ.fake.sig"}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_open(req, timeout=None):
+            captured["body"] = req.data
+            captured["url"] = req.full_url
+            return FakeResp()
+
+        with mock.patch.object(il.urllib.request, "build_opener") as bo:
+            bo.return_value.open.side_effect = fake_open
+            status, data, cookies = il.login_password("13000000000", "PLAINTEXT_SECRET")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["access_token"], "eyJ.fake.sig")
+        self.assertTrue(captured["url"].endswith("/api/iam/v1/auth/login/password/phone"))
+        self.assertNotIn(b"13000000000", captured["body"])
+        self.assertNotIn(b"PLAINTEXT_SECRET", captured["body"])
+        body = json.loads(captured["body"].decode())
+        self.assertEqual(sorted(body.keys()), ["nation_code", "password", "phone"])
+        self.assertEqual(body["nation_code"], "86")
+
+    def test_cloud_password_mode_overrides_token(self):
+        """云端配置密码时，run() 应改用现取的独立令牌。"""
+        fake_token = make_jwt({"sub": "user-1234", "exp": 4102444800,
+                               "sid": "ses-new-session"})
+        captured = {}
+
+        def fake_result():
+            return {"status": "pending", "message": "", "detail": {},
+                    "account": "手机号尾号4060", "checked_at": "x"}
+
+        with mock.patch.dict(os.environ, {"RACCOON_PHONE": "13400000000",
+                                          "RACCOON_PASSWORD": "SECRET",
+                                          "RACCOON_ACCESS_TOKEN": "old-token",
+                                          "RACCOON_ACCOUNT_ID": "1234"}, clear=False), \
+             mock.patch.object(rc, "base_result", side_effect=fake_result), \
+             mock.patch.object(sys, "argv", ["raccoon_checkin.py", "--check-only"]), \
+             mock.patch("iam_login.login_password",
+                        return_value=(200, {"access_token": fake_token}, [])), \
+             mock.patch.object(rc, "diagnose", side_effect=lambda t: captured.setdefault("token", t) or 0), \
+             mock.patch.object(rc, "write_rotated"):
+            rc.run()
+        self.assertEqual(captured.get("token"), fake_token)
 
 
 if __name__ == "__main__":

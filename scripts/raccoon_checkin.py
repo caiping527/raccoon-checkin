@@ -300,7 +300,8 @@ def diagnose(token):
             result["detail"]["revoked"] = True
             result["message"] = (
                 "登录会话已被服务端撤销(401)：客户端退出/重登该账号所致。"
-                "请用「安全换号.bat」走免登出流程重新登记，切勿在客户端点退出登录"
+                "请双击「密码登录.bat」用手机号+密码重新登记（不依赖桌面客户端）；"
+                "若在客户端操作，切勿点退出登录"
             )
         else:
             result["message"] = "账本只读查询失败：%s" % err
@@ -323,6 +324,29 @@ def run():
     at = (os.environ.get("RACCOON_ACCESS_TOKEN") or "").strip()
     rt = (os.environ.get("RACCOON_REFRESH_TOKEN") or "").strip()
     check_only = "--diagnose" in sys.argv or "--check-only" in sys.argv
+
+    # 可选「云端密码登录」：每次运行用手机号+密码现取一张独立会话。
+    # 这样令牌不依赖桌面客户端 auth.json：客户端切号 / 退出登录都不会让它失效，
+    # 也不存在 30 天到期问题。凭据由账号专属 Environment Secret 注入，绝不打印。
+    phone = (os.environ.get("RACCOON_PHONE") or "").strip()
+    pwd = os.environ.get("RACCOON_PASSWORD") or ""
+    if phone and pwd:
+        try:
+            import iam_login
+            status, data, _ = iam_login.login_password(
+                phone, pwd, os.environ.get("RACCOON_NATION_CODE") or "86")
+            fresh = data.get("access_token")
+            if status == 200 and fresh:
+                at = fresh
+                result["detail"]["auth_mode"] = "password"
+                print("云端密码登录成功：已取得独立会话（令牌内容不外显）")
+            else:
+                why = str(data.get("code") or data.get("message") or "无详情")[:120]
+                print("云端密码登录失败(HTTP %s %s)，回退到已存令牌" % (status, why))
+                result["detail"]["password_login_error"] = why
+        except Exception as exc:
+            print("云端密码登录异常(%s)，回退到已存令牌" % type(exc).__name__)
+            result["detail"]["password_login_error"] = type(exc).__name__
 
     if not at and not rt:
         result["message"] = "未配置凭据：需要 RACCOON_ACCESS_TOKEN 或 RACCOON_REFRESH_TOKEN"
