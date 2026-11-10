@@ -324,7 +324,8 @@ def analyze_expiry(items, today, warn_days=None):
     """逐笔统计积分的过期日，返回脱敏白名单结构。
 
     到期日来源有两类：
-      1) expire_at 字段（每日签到积分，每笔 300，约 6 天后到期）
+      1) expire_at 字段（每日签到积分，每笔 300；登录激活后 7 天有效，
+         未登录则发放当天 23:59 清零）
       2) event_name 文本里的「YYYY-MM-DD 到期」（兑换/奖励积分）
     只统计 points > 0 的入账；扣减/消费记录不参与。
     按 daily_grant / 其他 分成两类，便于后续用各自余额分别做 FIFO 校正。
@@ -338,6 +339,8 @@ def analyze_expiry(items, today, warn_days=None):
     rows = []
     all_rows = []
     unknown = 0
+    cleared = {}
+    grants_today = []
     for item in items or []:
         if not isinstance(item, dict):
             continue
@@ -355,7 +358,16 @@ def analyze_expiry(items, today, warn_days=None):
             points = float(_first(item, POINTS_KEYS))
         except (TypeError, ValueError):
             points = 0.0
-        if points <= 0:
+        if points < 0:
+            # 服务端「每日积分到期清零」负分流水：该批次已作废，不算手里的分
+            if biz in ("daily_expire", "daily_expired", "expire"):
+                exp_raw = (parse_expiry(_first(item, EXPIRY_KEYS))
+                           or parse_dt(str(item.get("created_at") or "")))
+                if exp_raw:
+                    k = exp_raw.astimezone(BEIJING).date().isoformat()
+                    cleared[k] = round(cleared.get(k, 0.0) + abs(points), 2)
+            continue
+        if points == 0:
             continue
         exp = parse_expiry(_first(item, EXPIRY_KEYS))
         source = "expire_at" if exp else ""
@@ -369,6 +381,15 @@ def analyze_expiry(items, today, warn_days=None):
         key = day.isoformat()
         row_ref["resolved_expire"] = key
         days_left = (day - base_day).days
+        # 每日 300 分的有效期策略：0 点发放，登录激活后 7 天内有效
+        # （expire_at = 发放日 + 6 天 23:59:59）；未激活则当天 23:59:59 清零。
+        if biz == "daily_grant" and str(item.get("created_at") or "")[:10] == base_day.isoformat():
+            state = ("activated_7d" if days_left == 6
+                     else ("same_day" if days_left == 0 else "other"))
+            grants_today.append({
+                "created_at": base_day.isoformat(), "points": points,
+                "expire_date": key, "span_days": days_left, "state": state,
+            })
         kind = "daily" if biz == "daily_grant" else "reward"
         bucket = buckets.setdefault(key, {
             "expire_date": key, "points": 0.0, "count": 0, "days_left": days_left,
@@ -403,6 +424,18 @@ def analyze_expiry(items, today, warn_days=None):
         "nearest_expire_date": active[0]["expire_date"] if active else None,
         "nearest_days_left": active[0]["days_left"] if active else None,
         "dated_by_event_name": sum(1 for r in rows if r["source"] == "event_name"),
+        "cleared_points": round(sum(cleared.values()), 2),
+        "cleared_by_date": cleared,
+        "activation": {
+            "today": base_day.isoformat(),
+            "grants": grants_today,
+            "same_day_points": round(sum(g["points"] for g in grants_today
+                                         if g["state"] == "same_day"), 2),
+            "activated_7d_points": round(sum(g["points"] for g in grants_today
+                                             if g["state"] == "activated_7d"), 2),
+            "policy": ("今晚23:59清零（未登录激活）" if any(g["state"] == "same_day" for g in grants_today)
+                       else ("7天有效（已登录激活）" if grants_today else "今日无发放记录")),
+        },
     }
 
 
@@ -463,6 +496,10 @@ def attach_expiry(result, today):
           % (expiry["records"], expiry["nearest_expire_date"] or "未知",
              expiry["nearest_days_left"] if expiry["nearest_days_left"] is not None else "?",
              expiry["warn_days"], expiry["soon_points"]))
+    act = expiry.get("activation") or {}
+    for g in act.get("grants") or []:
+        print("  [300分有效期] 今日发放 %g 分 → %s 到期（跨度 %s 天）：%s"
+              % (g["points"], g["expire_date"], g["span_days"], act.get("policy")))
     for bucket in (expiry["active_buckets"] or expiry["buckets"])[:12]:
         print("    · %s 到期发放 %g 分（%d 笔，剩 %d 天）"
               % (bucket["expire_date"], bucket["points"],
