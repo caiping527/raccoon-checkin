@@ -1,0 +1,40 @@
+name: 诊断-积分账单
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        tail: ['4060', '7100', '6717']
+    runs-on: ubuntu-latest
+    environment: acct-${{ matrix.tail }}
+    env:
+      RACCOON_ACCESS_TOKEN: ${{ secrets.RACCOON_ACCESS_TOKEN }}
+      RACCOON_ACCOUNT_ID: ${{ secrets.RACCOON_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 输出账单字段（脱敏）
+        run: |
+          python - <<'PY'
+          import os, json, sys
+          sys.path.insert(0, "scripts")
+          import raccoon_checkin as rc
+          token = os.environ.get("RACCOON_ACCESS_TOKEN") or ""
+          if not token:
+              print("NO_TOKEN"); raise SystemExit(0)
+          grant, err = rc.read_bills(token)
+          items = rc.SESSION.get("bills") or []
+          print("DIAG_ACCOUNT", os.environ.get("RACCOON_ACCOUNT_ID", "")[-4:], "COUNT", len(items), "ERR", err)
+          keys = sorted({k for it in items if isinstance(it, dict) for k in it})
+          print("DIAG_KEYS", ",".join(keys))
+          watch = ("created_at", "biz_type", "event_name", "points", "expire_at",
+                   "expire_time", "expired_at", "valid_until", "expireAt", "grant_at")
+          for it in items[:60]:
+              if not isinstance(it, dict):
+                  continue
+              row = {k: it.get(k) for k in keys if k in watch}
+              print("DIAG_BILL", json.dumps(row, ensure_ascii=False))
+          bal = rc.read_balance(token)
+          print("DIAG_BALANCE", json.dumps(bal, ensure_ascii=False, default=str)[:1500])
+          PY
