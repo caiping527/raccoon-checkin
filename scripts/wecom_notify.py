@@ -232,14 +232,20 @@ def build_report(rows):
              "| 排名 | 账号 | 当前积分 | 开始过期日 | 建议用掉日 | 临期待用 | 签到积分 | 奖励积分 | 签到状态 |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for i, r in enumerate(rows, 1):
-        use_by = r["use_by"] or "—"
-        if r["nearest_date"] and isinstance(r["nearest_days"], (int, float)) \
-                and r["nearest_days"] <= 1:
-            use_by = "今天"
-        lines.append("| %d | %s | **%g** | %s | %s | %g 分 | %g | %g | %s |" % (
-            i, r["account"], r["held"],
-            r["nearest_date"] or "—", use_by,
-            r["soon"], r["daily"], r["reward"],
+        if r["has_data"]:
+            held = "**%g**" % r["held"]
+            daily, reward, soon = "%g" % r["daily"], "%g" % r["reward"], "%g 分" % r["soon"]
+            nearest = r["nearest_date"] or "—"
+            use_by = r["use_by"] or "—"
+            if r["nearest_date"] and isinstance(r["nearest_days"], (int, float)) \
+                    and r["nearest_days"] <= 1:
+                use_by = "今天"
+        else:
+            # 签到失败时云端不会查余额，账本里的 0 不是真实余额，不能显示成 0 分
+            held, daily, reward, soon = "未取到", "—", "—", "—"
+            nearest, use_by = "—", "—"
+        lines.append("| %d | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            i, r["account"], held, nearest, use_by, soon, daily, reward,
             "成功" if r["status"] == "ok" else "失败"))
     lines.append("")
     lines.append("> 当前积分 = 客户端显示的 available_points（签到积分 + 奖励积分）。"
