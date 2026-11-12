@@ -5,3 +5,7 @@ result.json
 raccoon-rotated.env
 更新记录.txt
 *.log
+
+# 本模块私有账号（明文密码），只存本机，绝不进仓库
+账号.json
+*.bak

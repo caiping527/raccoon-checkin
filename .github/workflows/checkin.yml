@@ -169,17 +169,18 @@ jobs:
           exit 1
 
   recommend:
-    name: 今日优先用号推荐
+    name: 每日积分播报 + 优先用号推荐
     needs: [prepare_accounts, checkin]
     if: ${{ always() && needs.prepare_accounts.outputs.count != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      # 通知通道为仓库级 Secret；RECOMMEND_NOTIFY=always 可每天推全榜，
-      # =0 关闭；默认只在检测到临期积分时推一次。
+      # 每天签到完成后必推一条：每个账号的当前积分、积分开始过期的日子、
+      # 以及「提前一天用掉」的具体日期。RECOMMEND_NOTIFY=0 可整体关闭。
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       WECOM_APP: ${{ secrets.WECOM_APP }}
       RECOMMEND_NOTIFY: ${{ vars.RECOMMEND_NOTIFY }}
+      RACCOON_ACCOUNTS: ${{ vars.RACCOON_ACCOUNTS }}
       RACCOON_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: 检出仓库
@@ -197,7 +198,7 @@ jobs:
           pattern: expiry-*
           path: _expiry
 
-      - name: 按临期积分排序并推送
+      - name: 汇总各账号积分并推送每日播报
         run: |
           python scripts/wecom_notify.py --recommend _expiry | tee _recommend.md
           cat _recommend.md >> "$GITHUB_STEP_SUMMARY"
