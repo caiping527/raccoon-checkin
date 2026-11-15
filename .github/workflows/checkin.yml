@@ -10,7 +10,7 @@ name: 商汤小浣熊 每日登录动作
 on:
   schedule:
     # UTC 16:58 = 北京时间 00:58；五个项目错峰，避开 UTC 00~02 调度高峰
-    - cron: '58 16 * * *'
+    - cron: '58 19 * * *'   # 北京时间 03:58（工具箱「签到时间」）
   workflow_dispatch:
     inputs:
       check_only:
