@@ -15,20 +15,18 @@
   WECOM_WEBHOOK  群机器人完整 webhook（或仅 key）
   WECOM_APP      "corpid,corpsecret,touser,agentid"（touser 可为 @all）
 
-排版：应用消息通道固定发 text —— 实测微信端既不渲染 markdown（提示「暂不支持此
-消息类型」），也不渲染 textcard 的 div 配色（三色变全黑，嵌套标签直接漏源码），
-所以发给手机的那条必须是纯文本。群机器人（webhook）只在企业微信群里看，
-保留 markdown 彩色；两个通道各自渲染，内容同源。
+排版：纯文本 + emoji 色块，两个通道发同一份内容。
+  为什么要这样：微信端只渲染 text / image —— markdown 提示「暂不支持此消息类型」，
+  textcard 的 div 配色在微信插件里全部变灰（实测），而 image 会缩成缩略图，
+  非要点开才能看清。真正在微信里带颜色的只有 emoji 自带的色块（🟩🟥🟨…），
+  所以每行行首放一个 emoji 当「色标」，正文保持纯文本。
 """
 
-import io
 import json
 import os
-import re
 import sys
 import urllib.parse
 import urllib.request
-import uuid
 from datetime import date, datetime, timedelta, timezone
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -38,46 +36,17 @@ QYAPI = "https://qyapi.weixin.qq.com/cgi-bin"
 WARN_DAYS = float(os.environ.get("RACCOON_WARN_DAYS") or "7")
 BEIJING = timezone(timedelta(hours=8))
 
-# ── 企业微信 markdown 着色 ──────────────────────────────
-# 企微 markdown 只认 info（绿）/ warning（橙红）/ comment（灰）三种颜色，
-# 写别的色值会被当黑字，所以只暴露这三个语义名。
-C_INFO, C_WARN, C_NOTE = "info", "warning", "comment"
-MD_BYTE_LIMIT = 3800          # 企微 markdown 上限 4096 字节，留余量给截断提示
+TEXT_BYTE_LIMIT = 1900        # 企微 text 上限 2048 字节，留余量给截断提示
 
 
-def c(text, color=C_INFO):
-    return '<font color="%s">%s</font>' % (color, text)
-
-
-def strip_color(text):
-    """去掉颜色标签与 markdown 加粗，用于「通道不支持 markdown」时的纯文本降级。"""
-    return re.sub(r"\*\*", "", re.sub(r"</?font[^>]*>", "", text))
-
-
-def fit_markdown(text):
+def fit_text(text, limit=TEXT_BYTE_LIMIT):
     """超长按行截断：整条超限企微会直接拒收，比截断更糟。"""
-    if len(text.encode("utf-8")) <= MD_BYTE_LIMIT:
-        return text
-    out, size = [], 0
-    for line in text.split("\n"):
-        n = len(line.encode("utf-8")) + 1
-        if size + n > MD_BYTE_LIMIT - 80:
-            break
-        out.append(line)
-        size += n
-    out.append(c("…内容过长已截断，完整数据见运行详情", C_NOTE))
-    return "\n".join(out)
-
-
-def fit_plain(text, limit=1900):
-    """纯文本兜底也要限长：企微 text 消息上限 2048 字节。"""
-    text = strip_color(text)
     if len(text.encode("utf-8")) <= limit:
         return text
     out, size = [], 0
     for line in text.split("\n"):
         n = len(line.encode("utf-8")) + 1
-        if size + n > limit - 60:
+        if size + n > limit - 80:
             break
         out.append(line)
         size += n
@@ -85,160 +54,65 @@ def fit_plain(text, limit=1900):
     return "\n".join(out)
 
 
-# ── 彩虹图卡（微信端唯一能上色的消息类型是 image）──────────
-# 微信只渲染 text / image；markdown 会被提示「暂不支持此消息类型」，
-# textcard 的 div 配色也不生效（实测）。所以彩色只能自己画成 PNG。
-FONT_CANDIDATES = (
-    r"C:\Windows\Fonts\simhei.ttf",
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/arphic/uming.ttc",
-)
-IMG_COLORS = {"info": (200, 35, 44), "warning": (232, 83, 31), "comment": (120, 120, 120)}
-IMG_WIDTH, IMG_PAD = 780, 28
-_TOKEN_RE = re.compile(r'<font color="(\w+)">(.*?)</font>|\*\*(.+?)\*\*', re.S)
-
-
-def _font_path():
-    for p in FONT_CANDIDATES:
-        if os.path.isfile(p):
-            return p
-    return ""
-
-
-def _segments(line):
-    """把一行 markdown 拆成 [(文字, 颜色, 是否加粗)]，没有标签的段落给 None。"""
-    out, pos = [], 0
-    for m in _TOKEN_RE.finditer(line):
-        if m.start() > pos:
-            out.append((line[pos:m.start()], None, False))
-        if m.group(1):
-            out.append((m.group(2), IMG_COLORS.get(m.group(1), (34, 34, 34)), False))
-        else:
-            out.append((m.group(3), None, True))
-        pos = m.end()
-    if pos < len(line):
-        out.append((line[pos:], None, False))
-    return [s for s in out if s[0]]
-
-
-# 中日韩字体没有 emoji 字形，直接画会变成方框；换成同义符号。
-_GLYPH_FIX = {"⚠️": "▲", "⚠": "▲", "✅": "√", "❌": "×", "⏭": "»",
-              "👉": "→", "🔴": "●", "🟢": "●", "\ufe0f": ""}
-
-
-def _plain_glyphs(text):
-    for k, v in _GLYPH_FIX.items():
-        text = text.replace(k, v)
-    return text
-
-
-def _break_units(text):
-    """把一段文字切成折行单元：连续的 ASCII（数字/日期/符号）算一个整体，
-    避免把 2026-12-04 这种日期从中间劈开；中文逐字成单元。"""
-    units, buf = [], ""
-    for ch in text:
-        if ch.isascii() and not ch.isspace():
-            buf += ch
-            continue
-        if buf:
-            units.append(buf)
-            buf = ""
-        units.append(ch)
-    if buf:
-        units.append(buf)
-    return units
-
-
-_TRAILING_PUNCT = "：；，。、）」』】！？%"
-
-
-def render_png(text):
-    """把播报渲染成 PNG 字节流；缺 Pillow 或中文字体时返回 None（调用方退回纯文本）。"""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except Exception:  # noqa: BLE001 —— 云端没装 Pillow 就走纯文本
-        return None
-    fp = _font_path()
-    if not fp:
-        return None
-    try:
-        f_title = ImageFont.truetype(fp, 34)
-        f_body = ImageFont.truetype(fp, 26)
-    except Exception:  # noqa: BLE001
-        return None
-
-    rows = text.split("\n")
-    while rows and not rows[0].strip():
-        rows.pop(0)
-    while rows and not rows[-1].strip():
-        rows.pop()
-
-    # 先按像素宽度折行，得到 [(字体, [(文字, 字体, 颜色)])]
-    wrapped = []
-    for idx, line in enumerate(rows):
-        title = idx == 0
-        font = f_title if title else f_body
-        if not line.strip():
-            wrapped.append((font, []))
-            continue
-        cur, cur_w = [], 0.0
-        for chunk, color, _bold in _segments(_plain_glyphs(line)):
-            color = color or ((20, 20, 20) if title else (34, 34, 34))
-            for unit in _break_units(chunk):
-                w = font.getlength(unit)
-                # 收尾标点允许轻微越界，避免「：」被顶到下一行单独成行
-                over_ok = unit in _TRAILING_PUNCT and cur
-                if cur_w + w > IMG_WIDTH - IMG_PAD * 2 and cur and not over_ok:
-                    wrapped.append((font, cur))
-                    cur, cur_w = [], 0.0
-                if cur and cur[-1][1] is font and cur[-1][2] == color:
-                    cur[-1] = (cur[-1][0] + unit, font, color)
-                else:
-                    cur.append((unit, font, color))
-                cur_w += w
-        wrapped.append((font, cur))
-
-    height = IMG_PAD * 2
-    for font, segs in wrapped:
-        height += 48 if font is f_title else (18 if not segs else 40)
-    img = Image.new("RGB", (IMG_WIDTH, height), (255, 255, 255))
-    draw = ImageDraw.Draw(img)
-    y = IMG_PAD
-    for font, segs in wrapped:
-        if not segs:
-            y += 18
-            continue
-        x = IMG_PAD
-        for s, f, color in segs:
-            draw.text((x, y), s, font=f, fill=color)
-            x += f.getlength(s)
-        y += 48 if font is f_title else 40
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
-
-
-def upload_image(token, png):
-    """上传临时素材拿 media_id；失败返回空串（调用方退回纯文本）。"""
-    boundary = "----wb%d" % uuid.uuid4().int
-    body = b"".join([
-        ("--%s\r\n" % boundary).encode(),
-        b'Content-Disposition: form-data; name="media"; filename="report.png"\r\n',
-        b"Content-Type: image/png\r\n\r\n", png, b"\r\n",
-        ("--%s--\r\n" % boundary).encode(),
-    ])
+def post_json(url, payload):
     req = urllib.request.Request(
-        "%s/media/upload?access_token=%s&type=image" % (QYAPI, token),
-        data=body, method="POST",
-        headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            out = json.loads(resp.read().decode("utf-8", "replace"))
-        return out.get("media_id") or ""
-    except Exception:  # noqa: BLE001
-        return ""
+        url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def push_webhook(value, content):
+    url = value if value.startswith("http") else (
+        QYAPI + "/webhook/send?key=" + value)
+    r = post_json(url, {"msgtype": "text", "text": {"content": content}})
+    return "webhook:%s" % (r.get("errmsg") or r.get("errcode") or "ok")
+
+
+def push_app(value, content):
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) < 4:
+        return "app:配置格式错误（应为 corpid,corpsecret,touser,agentid）"
+    corpid, secret, touser, agentid = parts[0], parts[1], parts[2] or "@all", parts[3]
+    token_url = "%s/gettoken?corpid=%s&corpsecret=%s" % (
+        QYAPI, urllib.parse.quote(corpid, safe=""), urllib.parse.quote(secret, safe=""))
+    with urllib.request.urlopen(token_url, timeout=15) as resp:
+        token_data = json.loads(resp.read().decode("utf-8", "replace"))
+    if token_data.get("errcode") != 0:
+        return "app:gettoken失败 %s" % token_data.get("errmsg")
+    send_url = "%s/message/send?access_token=%s" % (QYAPI, token_data["access_token"])
+    r = post_json(send_url, {
+        "touser": touser, "msgtype": "text", "agentid": agentid,
+        "text": {"content": content}, "safe": 0,
+    })
+    # 企微 message/send 在「无人可见」时 errcode 仍为 0，只回 invaliduser；
+    # 把完整投递结果打进日志，避免出现「app:ok 但手机没收到」的假阳性。
+    bits = ["errcode=%s" % r.get("errcode"),
+            "errmsg=%s" % (r.get("errmsg") or "-")]
+    if r.get("invaliduser"):
+        bits.append("invaliduser=%s" % r["invaliduser"])
+    if r.get("msgid"):
+        bits.append("msgid=%s" % r["msgid"])
+    return "app:" + " ".join(bits)
+
+
+def push_all(text):
+    channels = []
+    webhook = (os.environ.get("WECOM_WEBHOOK") or "").strip()
+    app = (os.environ.get("WECOM_APP") or "").strip()
+    if webhook:
+        try:
+            channels.append(push_webhook(webhook, text))
+        except Exception as e:
+            channels.append("webhook异常:%s" % type(e).__name__)
+    if app:
+        try:
+            channels.append(push_app(app, text))
+        except Exception as e:
+            channels.append("app异常:%s" % type(e).__name__)
+    if not channels:
+        channels.append("未配置通知通道，仅打印：\n" + text)
+    return channels
 
 
 def truthy(v):
@@ -267,111 +141,24 @@ def decide(result):
 
 
 def build_text(result, title):
-    """单账号推送（markdown）：令牌到期日、状态这类关键信息上色。"""
+    """单账号告警：一行一个 emoji 色标，关键信息（到期/剩余天数）单独成行。"""
     days = result.get("token_days_left")
-    urgent = isinstance(days, (int, float)) and days <= WARN_DAYS
     failed = not str(title).startswith("✅")
-    lines = ["**%s**" % title,
-             "账号：%s" % c(result.get("account") or "未命名账号", C_INFO),
-             "状态：%s" % c(result.get("message") or "无详情", C_WARN if failed else C_INFO),
-             "时间：%s" % c(result.get("checked_at") or "-", C_NOTE)]
+    # decide() 的标题自带 emoji（❌/⚠️/✅），这里去掉，避免与行首色标重复
+    plain_title = str(title).replace("❌", "").replace("⚠️", "").replace("✅", "").strip()
+    lines = ["📌 小浣熊签到 · %s" % plain_title,
+             "🟦 账号：%s" % (result.get("account") or "未命名账号"),
+             "%s 状态：%s" % ("🟥" if failed else "✅", result.get("message") or "无详情")]
     if result.get("token_expire_at"):
-        color = C_WARN if urgent else C_INFO
-        lines.append("令牌到期：%s（剩余 %s 天）" % (
-            c(result["token_expire_at"], color),
-            c("%s" % (days if days is not None else "?"), color)))
+        lines.append("📅 令牌到期：%s，剩 %s 天" % (
+            result["token_expire_at"], days if days is not None else "?"))
     if title.startswith("⚠️"):
-        lines.append("处理：双击「单个账号登录（备用）.bat」重新登记该账号（不用打开客户端）")
+        lines.append("❗ 处理：双击「单个账号登录（备用）.bat」重新登记（不用打开客户端）")
+    lines.append("⏰ 时间：%s" % (result.get("checked_at") or "-"))
     run_url = os.environ.get("RACCOON_RUN_URL")
     if run_url:
-        lines.append("运行详情：%s" % run_url)
-    return fit_markdown("\n".join(str(x) for x in lines))
-
-
-def post_json(url, payload):
-    req = urllib.request.Request(
-        url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        method="POST", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
-
-
-def push_webhook(value, content):
-    url = value if value.startswith("http") else (
-        QYAPI + "/webhook/send?key=" + value)
-    r = post_json(url, {"msgtype": "markdown", "markdown": {"content": content}})
-    if r.get("errcode") in (0, None):
-        return "webhook:%s" % (r.get("errmsg") or "ok")
-    # 群机器人不支持 / 拒收 markdown：降级纯文本，保证消息一定送到
-    first = r.get("errmsg") or r.get("errcode")
-    r = post_json(url, {"msgtype": "text", "text": {"content": fit_plain(content)}})
-    return "webhook:markdown失败(%s)降级text:%s" % (
-        first, r.get("errmsg") or r.get("errcode"))
-
-
-def push_app(value, content):
-    parts = [p.strip() for p in value.split(",")]
-    if len(parts) < 4:
-        return "app:配置格式错误（应为 corpid,corpsecret,touser,agentid）"
-    corpid, secret, touser, agentid = parts[0], parts[1], parts[2] or "@all", parts[3]
-    token_url = "%s/gettoken?corpid=%s&corpsecret=%s" % (
-        QYAPI, urllib.parse.quote(corpid, safe=""), urllib.parse.quote(secret, safe=""))
-    with urllib.request.urlopen(token_url, timeout=15) as resp:
-        token_data = json.loads(resp.read().decode("utf-8", "replace"))
-    if token_data.get("errcode") != 0:
-        return "app:gettoken失败 %s" % token_data.get("errmsg")
-    send_url = "%s/message/send?access_token=%s" % (QYAPI, token_data["access_token"])
-    token = token_data["access_token"]
-    note = ""
-    # 1) 先发彩色图卡：微信端只认 text / image，彩色只能画成图
-    png = render_png(content)
-    if png:
-        media_id = upload_image(token, png)
-        if media_id:
-            r = post_json(send_url, {
-                "touser": touser, "msgtype": "image", "agentid": agentid,
-                "image": {"media_id": media_id}, "safe": 0,
-            })
-            if r.get("errcode") == 0:
-                return "app:图卡 ok msgid=%s" % (r.get("msgid") or "-")
-            note = "图卡被拒(%s)降级text " % (r.get("errmsg") or r.get("errcode"))
-        else:
-            note = "图卡上传失败降级text "
-    else:
-        note = "无Pillow/字体降级text "
-    # 2) 兜底纯文本（没颜色但一定看得见）
-    r = post_json(send_url, {
-        "touser": touser, "msgtype": "text", "agentid": agentid,
-        "text": {"content": fit_plain(content)}, "safe": 0,
-    })
-    # 企微 message/send 在「无人可见」时 errcode 仍为 0，只回 invaliduser；
-    # 把完整投递结果打进日志，避免出现「app:ok 但手机没收到」的假阳性。
-    bits = ["%serrcode=%s" % (note, r.get("errcode")),
-            "errmsg=%s" % (r.get("errmsg") or "-")]
-    if r.get("invaliduser"):
-        bits.append("invaliduser=%s" % r["invaliduser"])
-    if r.get("msgid"):
-        bits.append("msgid=%s" % r["msgid"])
-    return "app:" + " ".join(bits)
-
-
-def push_all(text):
-    channels = []
-    webhook = (os.environ.get("WECOM_WEBHOOK") or "").strip()
-    app = (os.environ.get("WECOM_APP") or "").strip()
-    if webhook:
-        try:
-            channels.append(push_webhook(webhook, text))
-        except Exception as e:
-            channels.append("webhook异常:%s" % type(e).__name__)
-    if app:
-        try:
-            channels.append(push_app(app, text))
-        except Exception as e:
-            channels.append("app异常:%s" % type(e).__name__)
-    if not channels:
-        channels.append("未配置通知通道，仅打印：\n" + text)
-    return channels
+        lines.append("🔗 运行详情：%s" % run_url)
+    return fit_text("\n".join(str(x) for x in lines))
 
 
 def _num(value):
@@ -447,31 +234,26 @@ def recommend_rows(root):
 
 
 def _expiry_sentence(r):
-    """单个账号的「开始过期日 + 提前一天用掉」提示（到期日/天数/分数上色）。"""
+    """单个账号的「开始过期日 + 提前一天用掉」提示（纯文本）。"""
     if not r["nearest_date"]:
         if not r["has_data"]:
-            return c("积分数据未取到（本次签到可能失败，见下方告警）", C_WARN)
-        return c("暂无标注到期日的待用积分（多为长期有效奖励分）", C_NOTE)
+            return "积分数据未取到（见下方告警）"
+        return "暂无标注到期日的待用积分（多为长期有效奖励分）"
     days = r["nearest_days"]
-    urgent = isinstance(days, (int, float)) and days <= 1
-    color = C_WARN if urgent else C_INFO
-    head = "%s 开始过期（剩 %s 天，这批 %s）" % (
-        c(r["nearest_date"], color),
-        c("%s" % (days if days is not None else "?"), color),
-        c("%g 分" % r["nearest_points"], color))
+    head = "%s 开始过期，剩 %s 天，这批 %g 分" % (
+        r["nearest_date"], days if days is not None else "?", r["nearest_points"])
     # 今明两天就到期时，「提前一天」可能已经落在昨天，给出过期日期反而误导
-    if urgent:
-        return head + "；" + c("⚠️ 今明两天就到期，今天就用掉", C_WARN)
+    if isinstance(days, (int, float)) and days <= 1:
+        return head + "；今明两天就到期"
     if r["use_by"]:
-        return head + "；建议 %s 前用掉，提前一天" % c(r["use_by"], C_INFO)
+        return head + "；建议 %s 前用掉" % r["use_by"]
     return head
 
 
 def build_report(rows):
-    """Markdown 榜单，写入 Actions Summary。"""
+    """Markdown 榜单，写入 Actions Summary（GitHub 页面用，不是手机推送）。"""
     if not rows:
         return "#### 每日积分播报\n\n- 本次没有收到任何账号的积分数据。\n"
-    warn = rows[0].get("warn") or 2
     lines = ["#### 每日积分播报（按临期未用积分从多到少排序）", "",
              "| 排名 | 账号 | 当前积分 | 开始过期日 | 建议用掉日 | 临期待用 | 签到积分 | 奖励积分 | 签到状态 |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -513,47 +295,63 @@ def build_report(rows):
 
 
 def build_daily_text(rows, run_url=None, expected=None):
-    """每日积分播报（企微 markdown，积分 / 到期日 / 天数用彩色字）。
+    """每日积分播报（纯文本 + emoji 色标，微信里直接显示彩色）。
 
     每个账号都列出：当前积分、积分开始过期的日子、提前一天用掉的具体日期。
     """
     today = datetime.now(BEIJING).strftime("%Y-%m-%d")
-    lines = ["**小浣熊 · 每日积分播报** %s" % today,
-             c("每个号的当前积分，以及积分哪天开始过期、该提前哪天用掉：", C_NOTE), ""]
-    if expected:
-        got = len(rows)
-        lack = "" if got >= expected else c("（有账号缺数据，见下方）", C_WARN)
-        lines.append("登记账号 %d 个，本次收到 %d 份积分数据%s" % (expected, got, lack))
-        lines.append("")
+    lines = ["📌 小浣熊 · 每日积分播报", "📅 %s" % today]
     if not rows:
-        lines.append(c("本次没有收到任何账号的积分数据，请查看运行详情。", C_WARN))
+        lines.append("⚠️ 本次没有收到任何账号的积分数据，请查看运行详情")
         if run_url:
-            lines.append("运行详情：%s" % run_url)
-        return fit_markdown("\n".join(lines))
-    for i, r in enumerate(rows, 1):
-        lines.append("**%d. %s**" % (i, r["account"]))
-        if r["has_data"]:
-            lines.append("当前积分：%s（签到 %g / 奖励 %g）"
-                         % (c("%g 分" % r["held"], C_INFO), r["daily"], r["reward"]))
-        else:
-            lines.append("当前积分：%s" % c("未取到", C_WARN))
-        lines.append(_expiry_sentence(r))
-        if r["same_day"] > 0:
-            lines.append(c("⚠️ 今日 %g 分今晚 23:59 清零，尽快登录用掉" % r["same_day"], C_WARN))
-        if r["status"] != "ok" and r["message"]:
-            lines.append(c("⚠️ 签到状态：%s" % r["message"][:60], C_WARN))
-        lines.append("")
-    soon = [r for r in rows if r["soon"] > 0]
-    if soon:
-        lines.append("建议：今天优先用 %s 跑代码，临期积分多的先用，别拖到过期当天。"
-                     % c(soon[0]["account"], C_INFO))
+            lines.append("🔗 运行详情：%s" % run_url)
+        return fit_text("\n".join(lines))
+
+    ok_n = sum(1 for r in rows if r["status"] == "ok")
+    bad_n = len(rows) - ok_n
+    head = "📣 登记 %d 个账号，收到 %d 份积分数据" % (
+        expected if expected else len(rows), len(rows))
+    if bad_n:
+        head += "，%d 个签到失败" % bad_n
     else:
-        lines.append(c("今天没有临期积分，不用特意切号。", C_NOTE))
-    lines.append(c("注：签到积分有明确到期日；部分奖励积分的到期日写在发放说明里，"
-                   "未标注的不猜测。", C_NOTE))
+        head += "，全部签到成功"
+    lines.append(head)
+
+    for r in rows:
+        lines.append("")
+        lines.append(("🟩 " if r["status"] == "ok" else "🟥 ") + r["account"])
+        if r["status"] != "ok":
+            lines.append("❗ 签到失败：%s" % ((r["message"] or "未知原因")[:60]))
+            continue
+        if not r["has_data"]:
+            lines.append("⚪ 积分数据未取到")
+            continue
+        lines.append("💰 当前积分 %g 分（签到 %g / 奖励 %g）"
+                     % (r["held"], r["daily"], r["reward"]))
+        if r["nearest_date"]:
+            days = r["nearest_days"]
+            lines.append("📅 %s 开始过期，剩 %s 天，这批 %g 分"
+                         % (r["nearest_date"], days if days is not None else "?",
+                            r["nearest_points"]))
+            if isinstance(days, (int, float)) and days <= 1:
+                lines.append("⏰ 今天就用掉，明天开始作废")
+            elif r["use_by"]:
+                lines.append("⏰ 建议 %s 前用掉（提前一天）" % r["use_by"])
+        else:
+            lines.append("⚪ 暂无标注到期日的待用积分（多为长期奖励分）")
+        if r["same_day"] > 0:
+            lines.append("🔔 今日 %g 分今晚 23:59 清零，尽快登录用掉" % r["same_day"])
+
+    soon = [r for r in rows if r["soon"] > 0]
+    lines.append("")
+    if soon:
+        lines.append("📣 今天优先用 %s，临期积分先用，别拖到过期当天" % soon[0]["account"])
+    else:
+        lines.append("⚪ 今天没有临期积分，不用特意切号")
+    lines.append("⚪ 注：签到积分有明确到期日；奖励分未标注到期日的不猜测")
     if run_url:
-        lines.append("运行详情：%s" % run_url)
-    return fit_markdown("\n".join(lines))
+        lines.append("🔗 运行详情：%s" % run_url)
+    return fit_text("\n".join(lines))
 
 
 def recommend_main(root):
