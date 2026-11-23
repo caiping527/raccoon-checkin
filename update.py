@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""小浣熊签到 · 本机公共库（仅供「密码登录.bat」调用，不直接运行）。
+"""小浣熊签到 · 本机公共库（仅供「单个账号登录（备用）.bat」调用，不直接运行）。
 
 只保留 password_login.py 实际复用的最小集合：
   gh / die / log / resolve_repo / jwt_payload / fetch_phone_tail / TAIL_RE
@@ -26,19 +26,14 @@ DEFAULT_REPO = "caiping527/raccoon-checkin"
 ORIGIN = (os.environ.get("RACCOON_MAIN_SITE_URL") or "https://xiaohuanxiong.com").rstrip("/")
 IAM_ACCOUNT_URL = ORIGIN + "/api/iam/v1/account"
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(HERE, "更新记录.txt")
 TAIL_RE = re.compile(r"^\d{4}$")
 
 
 def log(tail, target, ok, note=""):
-    line = "%s\t手机号尾号%s\t%s\t%s%s" % (
-        datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S"), tail or "????",
-        target, "同步成功" if ok else "失败", (" · " + note) if note else "")
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    """运行摘要只打印到控制台，不落盘（总说明格式约定）。"""
+    print("  手机号尾号%s | %s | %s%s" % (
+        tail or "????", target, "同步成功" if ok else "失败",
+        (" · " + note) if note else ""))
 
 
 def die(msg, advice="", tail="", target="-"):

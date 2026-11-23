@@ -625,7 +625,7 @@ def check_ownership(result, token):
     if INTERNAL_ID and INTERNAL_ID != tail:
         # 该消息会进企业微信推送，不写任何内部ID尾号
         result["message"] = ("凭据归属不符：令牌属于另一个账号，已中止"
-                             "（请重新登录该账号并双击「密码登录.bat」）")
+                             "（请重新登录该账号并双击「单个账号登录（备用）.bat」）")
         return False
     return True
 
@@ -642,7 +642,7 @@ def diagnose(token):
         print(result["message"])
         return 1
     if days is not None and days <= 0:
-        result["message"] = "登录令牌已过期，请在本机运行「密码登录.bat」"
+        result["message"] = "登录令牌已过期，请在本机运行「单个账号登录（备用）.bat」"
         write_result(result)
         print(result["message"])
         return 1
@@ -652,13 +652,13 @@ def diagnose(token):
             result["detail"]["revoked"] = True
             result["message"] = (
                 "登录会话已被服务端撤销(401)：客户端退出/重登该账号所致。"
-                "请双击「密码登录.bat」用手机号+密码重新登记（不依赖桌面客户端）；"
+                "请双击「单个账号登录（备用）.bat」用手机号+密码重新登记（不依赖桌面客户端）；"
                 "若在客户端操作，切勿点退出登录"
             )
         elif "iam_confirm_required" in err or "200901" in err:
             result["detail"]["confirm_failed"] = True
             result["message"] = ("会话确认失败：云端已自动确认并重试仍被网关拦截，"
-                                 "请重新双击「密码登录.bat」登记该账号")
+                                 "请重新双击「单个账号登录（备用）.bat」登记该账号")
         elif err.startswith("HTTP 0") or "网络请求失败" in err:
             result["detail"]["transient_network"] = True
             result["message"] = ("云端到小浣熊接口网络波动：%s（已自动重试，"
@@ -766,7 +766,7 @@ def run():
         result["token_days_left"] = days
 
     if days is not None and days <= 0:
-        result["message"] = "登录令牌已过期，请在本机运行「密码登录.bat」"
+        result["message"] = "登录令牌已过期，请在本机运行「单个账号登录（备用）.bat」"
         write_rotated(rotated_pairs)
         write_result(result)
         print(result["message"])

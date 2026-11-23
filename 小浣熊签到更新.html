@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>商汤小浣熊 · 使用说明</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1b1f26; --ink2:#5b6472; --line:#e3e6ec;
+    --accent:#2f6feb; --warn:#b45309; --ok:#0f7b4f; --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.75 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:940px;margin:0 auto;padding:0 24px 80px}
+  header{padding:52px 0 26px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 8px;font-size:29px;letter-spacing:-.4px;font-weight:700}
+  .sub{color:var(--ink2);font-size:14.5px}
+  h2{margin:40px 0 12px;font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+  h2 .n{display:inline-flex;width:26px;height:26px;border-radius:7px;background:var(--accent);color:#fff;
+        font-size:13px;font-weight:700;align-items:center;justify-content:center;flex:0 0 auto}
+  h3{margin:22px 0 8px;font-size:15.5px;font-weight:700}
+  p{margin:10px 0}
+  code{font-family:var(--mono);font-size:13px;background:#eef1f6;border:1px solid var(--line);
+       border-radius:4px;padding:1px 5px;white-space:nowrap}
+  pre{margin:14px 0;background:#141a22;color:#dfe6f0;border-radius:10px;padding:16px 18px;overflow-x:auto;
+      font-family:var(--mono);font-size:13px;line-height:1.7}
+  pre code{background:none;border:0;padding:0;color:inherit;white-space:pre}
+  table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--card);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f2f6;font-weight:700;font-size:13.5px}
+  tr:last-child td{border-bottom:0}
+  .idea{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+        border-radius:10px;padding:14px 18px;margin:14px 0}
+  .idea b{display:block;margin-bottom:4px}
+  .idea span{color:var(--ink2);font-size:14px}
+  .warn{background:#fff8ed;border:1px solid #f3ddb7;border-left:3px solid var(--warn);border-radius:10px;
+        padding:14px 18px;margin:16px 0;font-size:14px}
+  .ok{background:#f0f9f4;border:1px solid #c6e8d5;border-left:3px solid var(--ok);border-radius:10px;
+       padding:14px 18px;margin:16px 0;font-size:14px}
+  ul{margin:10px 0;padding-left:22px}
+  li{margin:6px 0}
+  .raw{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.8px;
+       line-height:1.72;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink2);font-size:13px}
+  .idea p{margin:6px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>商汤小浣熊 · 使用说明</h1>
+  <div class="sub">云端每日自动签到 + 本机桌面一键换号 · 本模块设计理念与操作</div>
+</header>
+
+<div class="ok">
+  <b>说明的层级</b>：整套框架的<b>条款清单</b>与「工具箱」自身的设计理念见
+  <code>签到说明.txt</code>（签到说明.txt直接打开，冲突时以它为准）。
+  本页只讲 <b>小浣熊签到更新</b> 这一件事，并写清它自己的设计理念。
+</div>
+
+
+<h2 id="idea"><span class="n">0</span>本模块的设计理念</h2>
+<div class="idea">
+<b>① 账号是本模块私有数据，不进公用配置</b>
+<span>小浣熊的手机号/密码存在本目录 <code>账号.json</code>，不进
+<code>参数配置\配置.json</code>，也不进换机流程。这是唯一一个账号不来自 AI路由魔改版 的项目，
+所以要单独留一份账号与运行时间界面。</span>
+</div>
+<div class="idea">
+<b>② 桌面一键换号：不碰云端、不动凭据</b>
+<span>四个桌面快捷方式只是「用某个账号启动客户端」的启动器，
+凭据由 AI路由魔改版 的登录态托管。换号是本机动作，不需要重新登记、不需要上 GitHub。</span>
+</div>
+<div class="idea">
+<b>③ 逐笔账本，不猜积分过不过期</b>
+<span>积分是否过期以客户端实测为准：<code>/api/web/points/v1/bills</code> 逐笔入账、
+<code>balance</code> 观测分项。<code>expire_at</code> 只作观测记录，不作成功/失败判据，
+所以「积分过期」与「不过期」两种模型下都不会误报失败。这是每日积分播报的数据基础。</span>
+</div>
+<div class="idea">
+<b>④ 每天必推一条，少一个号也要能被发现</b>
+<span><code>recommend</code> job 汇总所有账号的 artifact，即使某号签到失败、
+没拿到积分数据，也要占一行并明确标「未取到」，绝不显示成 0 分 / 长期有效。
+否则「少了一个号」会静默过去。</span>
+</div>
+<div class="idea">
+<b>⑤ 密码可选上云，令牌过期也不用管</b>
+<span>可以把密码一并写进云端，让云端每天自动登录换新令牌；
+不写也行，令牌临期时企业微信会提前 7 天提醒。两条路都留着，由使用者选。</span>
+</div>
+
+<h2 id="manual"><span class="n">1</span>原使用说明（全文保留）</h2>
+<div class="raw">==================================================
+ 商汤小浣熊 · 云端每日自动签到 + 本机桌面一键换号
+ 本目录：GITHUB签到\小浣熊签到更新
+==================================================
+
+【说明的层级】
+  整套框架的最终形态与设计理念，见 签到说明.txt
+  （签到说明.txt直接打开，冲突时以它为准）。
+  本文件只讲小浣熊签到这一件事。
+
+【框架边界】
+  · 工具箱\ 是框架核心，只放公用凭据；本模块私有的东西放本目录。
+  · 小浣熊账号密码是本模块私有数据，存在本目录 账号.json，
+    不进 参数配置\配置.json，也不进换机流程。
+  · 删掉其它任一模块文件夹，不影响本模块运行。
+  · AI路由魔改版 独立维护，本工具箱不部署它；本模块的账号与云端 Secret
+    由「账号与运行时间」和「一键更新」自己管，换机对它们没有影响。
+
+【日常：什么都不用做】
+  GitHub Actions 每天 UTC 19:58（北京时间 03:58）自动为配置里的每个
+  账号各模拟一次桌面端登录动作，当天 300 积分随之入账。不开电脑、不打开
+  客户端、不用点任何按钮。因 GITHUB 原因会延迟 5~8 小时，实际落点
+  08:58–11:58，属正常现象（心跳窗口到北京 17:00 才截止，不撞车）。
+  账号密码已存在 GitHub 加密 Secret 里，云端每天现取
+  新会话，所以客户端切号、退出登录、令牌到期都不会影响签到。
+  签到完成后每天必推一条企业微信「每日积分播报」：逐个账号列出当前积分、
+  积分哪天开始过期、该提前哪天用掉；签到成功本身不额外打扰，
+  失败 / 令牌临期才单独告警，详见下方章节。
+  想确认有没有跑：https://github.com/caiping527/raccoon-checkin/actions
+  想每次成功都收到推送：把仓库变量 SUCCESS_NOTIFY 设为 1。
+  不想收每日播报：把仓库变量 RECOMMEND_NOTIFY 设为 0。
+
+【入口 / 唯一需要动手的时候】
+  加账号、改密码：路由工具箱.exe →【小浣熊签到】→ 账号与运行时间
+  改云端签到时间：同一页底部的「云端签到时间（北京时间）」，
+                  填好点一次【一键更新到 GitHub】= 保存本地 + 提交云端 + 自动校验
+  把账号登记到云端：路由工具箱.exe →【小浣熊签到】→ 小浣熊签到
+                    或双击本目录「一键更新.bat」
+  只有两种情况要跑「一键更新」：1. 新增一个账号  2. 该账号改了密码。
+
+【怎么加账号：账号框 + 密码框，分开填，不用逗号】
+  1. 小浣熊签到更新\account_editor.py打开编辑窗口：
+     · 上面一个「账号」框、一个「密码」框，各填各的，不用逗号、不用每行一个
+     · 点「保存」，这一组就明文列进下方的大方框
+     · 大方框里点中某一条、点「删除选中」即可删掉，随时可增删改
+     · 明文只存本机 账号.json，本机自用方便核对
+  2. 双击「一键更新.bat」——脚本依次登录、依次写 GitHub，
+     窗口逐账号打印结果，最后触发一次云端自检
+
+  ★ 不用开客户端、不用切号、不用一个账号跑一次、不用手拼「手机号,密码」。
+    小浣熊是商汤的独立账号体系，AI路由魔改版 里没有它的凭据，做不到「直接读取」；
+    但它本来也不需要切客户端：用手机号 + 密码调登录接口换独立令牌即可。
+  ★ 默认把密码也存进云端加密 Secret，云端每天自动登录，
+    连令牌过期都不用再管。已登记过的账号重复跑也无害。
+
+【写到哪】
+  每个账号一个 Environment「acct-&lt;尾号&gt;」，里面写：
+    RACCOON_ACCESS_TOKEN / RACCOON_ACCOUNT_ID
+    RACCOON_PHONE / RACCOON_PASSWORD（默认存）
+  并把尾号登记进仓库变量 RACCOON_ACCOUNTS，重复运行不会重复添加。
+
+【配置改哪里】
+  公用凭据在 参数配置\配置.json，用参数配置\参数配置.exe明文编辑，
+  只有所有模块都要用的两样：GitHub 令牌、企业微信凭据。
+  改完点「保存」，本模块下次运行自己来读；只改本机、不动云端。
+  目标仓库地址写在本模块代码里，不用填。
+  账号密码不在这里，在【小浣熊签到 → 账号与运行时间】。
+  公用配置不会把任何数据推到 GitHub；真正写云端的是「一键更新.bat」。
+
+  ★ 公用配置里只有一套 PAT（GitHub 令牌）；这里的「多账号」指多个
+    小浣熊业务账号映射到同一 owner 的仓库与 Environment。
+
+【多账号为什么要错峰（重要）】
+  以前多个账号是【同时】打同一个接口。号一多，平台侧看到的就是一堆
+  同一时刻、同一出口 IP 的请求，容易被判定成异常流量 —— 哪天平台改
+  风控规则，可能一次全挂。
+
+  现在改成【串行 + 固定间隔】：
+    · max-parallel: 1  —— 同一时刻只跑一个账号（GitHub 唯一能控制
+                           账号之间间隔的开关，matrix 默认是并行的）
+    · 每个账号都固定等 90 秒再开始
+
+  为什么用「固定间隔」而不是「逐次递增」：
+    串行本身已经让账号一个接一个跑；再叠加递增等待，第 4 个账号要等
+    270 秒，总时长被拖到 10 分钟以上（实测过，太慢）。固定间隔就够
+    把相邻两次请求隔开，总时长也控得住。
+
+  实际时间轴（4 个账号，单账号约 30 秒）：
+    账号1 → 0:00 立即开始
+    账号2 → 约 2:00 （等前一个跑完 + 90 秒）
+    账号3 → 约 4:00
+    账号4 → 约 6:00
+    整体约 6.5 分钟跑完（原来是 30 秒全部并行）
+
+  ★ timeout 已从 10 分钟放宽到 15 分钟，给错峰留余量。
+    按 8 个账号估算，最坏约 12.5 分钟，仍在 15 分钟内。
+  ★ 想改间隔：改 .github/workflows/checkin.yml 里 `sleep 90` 的 90。
+    间隔 × 账号数 不要超过 15 分钟。
+
+【积分构成（云端实测 2026-11-09）】
+  客户端显示的「积分」是 available_points（总可用积分）：
+    4060 = 10300 分（签到 300 + 奖励 10000）
+    7100 =  5535 分（签到   0 + 奖励  5535）
+    6717 =  3899 分（签到 300 + 奖励  3599）
+  早期榜单只显示 daily_points，看起来只有 300 甚至 0，口径偏小；
+  现已改成显示总可用积分并拆开两类。
+
+  到期日有两个来源：
+    1) expire_at 字段：每日签到发的 300，约 6 天后到期
+    2) event_name 文本：部分奖励把日期写在发放说明里，这类还有近一年
+  其余奖励入账未标注到期日，程序单独列出，不猜测过期时间。
+  ★ 短期内真正会过期的是「每日签到 300」这一档，
+    每号最多滚动 6~7 天约 2000 分；那几千奖励分大多长期有效。
+
+【积分过期检测 + 每日积分播报】
+  账本只记发放流水、不记逐笔消耗，单看发放日会误报（余额早就花光了）。
+  因此程序用「当前余额」按最早到期先扣（FIFO），且签到类 / 奖励类
+  各自用对应余额分别摊回各批次，算出真正「快过期且还没花掉」的分数。
+  每天签到完成后固定做三件事：
+    1. Actions 摘要列出每个号的当前积分与积分过期分布（Markdown 榜单）
+    2. 企业微信推送一条「每日积分播报」：每个号一行，写明
+       当前积分（签到分 / 奖励分）、积分开始过期的日子、
+       以及「提前一天用掉」的具体日期；今明两天就到期会直接提示今天用掉
+    3. 按「临期未用积分」从多到少排序，给出今天优先用哪个号跑代码
+  登记 N 个账号却只收到 M 份数据时，播报会明确写出缺数据；
+  签到失败的号显示「未取到」而不是假的 0 分，不会漏号没人发现。
+  ★ 系统只负责「检测 + 排序提醒」，不会自动替你消耗积分：
+    看到推送后，用榜首那个号登录小浣熊去跑代码即可。
+  可调的仓库变量（不设也能用）：
+    RACCOON_EXPIRE_WARN_DAYS  临期阈值，默认 2 天
+    RECOMMEND_NOTIFY          0=关闭每日播报 / 未设或其它值=每天推（默认）
+    SUCCESS_NOTIFY            1=每次签到成功也单独推一条（默认不推）
+
+【成功判据】
+  只看一件事：今天的积分账本里有没有新入账 300
+  （按 daily_grant 的 created_at 严格比对今天）。
+  过期检测是附加的观测功能，不参与成功/失败判定，不会误报签到失败。
+
+【常见失败】
+  · 401 会话已撤销 → 该账号没登记过或改了密码 → 账号与运行时间里改好，重跑一键更新
+  · HTTP 400 iam_confirm_required → 云端已自动处理，无需人工干预
+  · 网络超时 / HTTP 5xx → 云端自动重试 2 次；仍失败时企微会写明
+    「云端网络波动」，不影响下次定时
+  · 「本模块还没有小浣熊账号」→ 到【小浣熊签到 → 账号与运行时间】加一组
+  · 缺少 GitHub 令牌 → 参数配置\参数配置.exe重填 github_token
+  · bat 一闪而过 → 在该目录打开 cmd 手动敲 bat 名看报错
+  · 凭据归属不符 → 该环境的令牌属于另一个号，重跑一键更新正确账号
+
+【命令行（一般用不到）】
+  python batch_login.py --dry-run              只预览账号清单，零写入
+  python batch_login.py --no-check             登记但不触发云端自检
+  python batch_login.py --no-store-password    不把密码存进云端
+
+【目录说明】
+  账号.json          ← 本模块私有账号清单（账号 / 密码分字段，明文，可删）
+  account_editor.py  ← 账号与运行时间窗口（工具箱「账号与运行时间」动态加载）
+  一键更新.bat       ← 登记到云端（工具箱「小浣熊签到」即调用它）
+  batch_login.py     ← 主程序：读 账号.json + 公用配置 → 依次登录 → 依次写 GitHub
+  password_login.py  ← 旧版「单个账号手输」入口，兼容保留，日常不用
+  单个账号登录（备用）.bat  ← 同上
+  update.py          ← 被复用的公共库（尾号识别、gh 调用等）
+  scripts\           ← 云端签到脚本，本机不用管
+    iam_login.py        官网同款 AES-128-CFB 单个账号登录
+    raccoon_checkin.py  签到主逻辑
+    wecom_notify.py     企业微信推送：单账号告警 + 每日积分播报 + 跨账号临期排序
+    summarize_result.py Actions 运行摘要（含积分过期分布）
+  小浣熊签到更新.html       ← 本文件
+
+【安全边界】
+  · 账号密码只从本模块 账号.json 读取，本机明文；传给 gh 一律走 stdin，
+    不进命令行、不打印、不落运行日志
+  · 云端密码存 GitHub 加密 Secret，不进代码、不进日志、不进推送
+  · GitHub Secret 只写不读：官网拿不回明文密码，改密码要在账号与运行时间里重填
+  · 仓库保持 Private；公开仓库 60 天无活动会被 GitHub 停用定时任务
+  · 请仅用于自己的账号，并遵守平台服务条款
+</div>
+
+<div class="foot">
+  GITHUB签到 · 小浣熊签到更新 ｜ 说明文件统一为 HTML、文件名即项目名（小浣熊签到更新.html）；原 TXT 说明与新增功能设计理念的内容已并入本页，TXT 源文件已删除。
+</div>
+
+</div>
+</body>
+</html>

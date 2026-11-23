@@ -5,7 +5,7 @@ name: 商汤小浣熊 每日登录动作
 # 账号体系：仓库变量 RACCOON_ACCOUNTS 里的每个标签 = 一个 Environment `acct-<标签>`，
 # 环境内存放该账号专属的 RACCOON_ACCESS_TOKEN（登录令牌）、
 # RACCOON_ACCOUNT_ID（内部ID尾号，防串号）、可选 RACCOON_REFRESH_TOKEN。
-# 新增账号：本机双击「密码登录.bat」输入手机号+密码即可，无需改本文件、无需上网页加 Secret。
+# 新增账号：本机双击「单个账号登录（备用）.bat」输入手机号+密码即可，无需改本文件、无需上网页加 Secret。
 
 on:
   schedule:
@@ -106,9 +106,9 @@ jobs:
           if [ -n "$RACCOON_ACCESS_TOKEN" ] || [ -n "$RACCOON_REFRESH_TOKEN" ]; then
             echo "✓ 令牌已配置（内容不外显）"
           elif [ -n "$RACCOON_PHONE" ] && [ -n "$RACCOON_PASSWORD" ]; then
-            echo "✓ 密码登录已配置（内容不外显），本次运行将现取独立会话"
+            echo "✓ 单个账号登录已配置（内容不外显），本次运行将现取独立会话"
           else
-            echo "::error::环境 acct-${{ matrix.tail }} 未配置凭据，请在本机双击「密码登录.bat」登记该账号"
+            echo "::error::环境 acct-${{ matrix.tail }} 未配置凭据，请在本机双击「单个账号登录（备用）.bat」登记该账号"
             exit 1
           fi
 
@@ -166,7 +166,7 @@ jobs:
         run: |
           [ -s raccoon-rotated.env ] || exit 0
           if [ -z "$GH_PAT" ]; then
-            echo "::warning::令牌已轮换但未配置 GH_PAT Secret，请在本机运行「密码登录.bat」"
+            echo "::warning::令牌已轮换但未配置 GH_PAT Secret，请在本机运行「单个账号登录（备用）.bat」"
             exit 0
           fi
           while IFS='=' read -r name token; do

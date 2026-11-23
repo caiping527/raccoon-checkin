@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""小浣熊签到 · 唯一本机工具（双击根目录「密码登录.bat」运行）。
+"""小浣熊签到 · 唯一本机工具（双击根目录「单个账号登录（备用）.bat」运行）。
 
 用官方「手机号 + 密码」接口换一张独立令牌，完全不依赖桌面客户端，
 不需要打开或退出小浣熊；新增账号、改密码后重跑一次即可。
@@ -38,13 +38,13 @@ def ask_credentials(args):
     password = args.password or os.environ.get("RACCOON_PASSWORD") or ""
     if not phone:
         if not sys.stdin.isatty():
-            update.die("未取得手机号", "双击「密码登录.bat」后按提示输入，或自行设置 RACCOON_PHONE")
+            update.die("未取得手机号", "双击「单个账号登录（备用）.bat」后按提示输入，或自行设置 RACCOON_PHONE")
         phone = input("  请输入手机号（11 位，如 13800138000）：").strip()
     if not PHONE_RE.fullmatch(phone):
         update.die("手机号格式不对（需要 11 位大陆手机号）", "重新运行并输入正确手机号")
     if not password:
         if not sys.stdin.isatty():
-            update.die("未取得密码", "双击「密码登录.bat」后按提示输入，或自行设置 RACCOON_PASSWORD")
+            update.die("未取得密码", "双击「单个账号登录（备用）.bat」后按提示输入，或自行设置 RACCOON_PASSWORD")
         if args.hide_password:
             password = getpass.getpass("  请输入密码（输入不显示）：")
         else:
@@ -56,7 +56,7 @@ def ask_credentials(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="小浣熊签到 · 密码登录登记")
+    ap = argparse.ArgumentParser(description="小浣熊签到 · 密码登录登记（备用入口）")
     ap.add_argument("--phone", help="手机号（不建议在命令行明文传，留空交互输入）")
     ap.add_argument("--password", help="密码（不建议在命令行明文传，留空交互输入）")
     ap.add_argument("--nation-code", default="86")
@@ -73,7 +73,7 @@ def main():
     args = ap.parse_args()
 
     print("=" * 60)
-    print(" 商汤小浣熊签到 · 密码登录登记（免桌面客户端）")
+    print(" 商汤小浣熊签到 · 密码登录登记（备用入口，免桌面客户端）")
     print("=" * 60)
     repo = update.resolve_repo(args.repo)
     print("  目标仓库：%s" % repo)
@@ -156,7 +156,7 @@ def main():
                    "--repo", repo, "--env", env_name], stdin=password)
         print("  ✓ 已写入 RACCOON_PHONE / RACCOON_PASSWORD（云端每天自动登录，不再需要管令牌过期）")
     else:
-        print("  · 未保存密码：约 30 天后令牌到期时重新双击「密码登录.bat」即可")
+        print("  · 未保存密码：约 30 天后令牌到期时重新双击「单个账号登录（备用）.bat」即可")
 
     cur = update.gh(["variable", "get", "RACCOON_ACCOUNTS", "--repo", repo], check=False)
     existing = [t for t in re.split(r"[,\s]+", (cur.stdout or "").strip())
