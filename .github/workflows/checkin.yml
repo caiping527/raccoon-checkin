@@ -143,6 +143,11 @@ jobs:
           echo "### 小浣熊签到 · 手机号尾号${{ matrix.tail }}" >> "$GITHUB_STEP_SUMMARY"
           python scripts/summarize_result.py result.json >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 准备图卡环境（Pillow + 中文字体，装不上会自动退回纯文本）
+        run: |
+          python -m pip install --quiet pillow || true
+          (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-wqy-zenhei) || true
+
       - name: 企业微信通知（失败 / 令牌临期）
         if: always()
         env:
@@ -211,6 +216,11 @@ jobs:
         with:
           pattern: expiry-*
           path: _expiry
+
+      - name: 准备图卡环境（Pillow + 中文字体，装不上会自动退回纯文本）
+        run: |
+          python -m pip install --quiet pillow || true
+          (sudo apt-get update -qq && sudo apt-get install -y -qq fonts-wqy-zenhei) || true
 
       - name: 汇总各账号积分并推送每日播报
         run: |
