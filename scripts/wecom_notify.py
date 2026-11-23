@@ -15,9 +15,10 @@
   WECOM_WEBHOOK  群机器人完整 webhook（或仅 key）
   WECOM_APP      "corpid,corpsecret,touser,agentid"（touser 可为 @all）
 
-排版：走企微 markdown，积分 / 到期日 / 剩余天数这类关键数字用彩色字
-（企微只支持 info 绿 / warning 橙红 / comment 灰），其余说明文字保持黑白。
-通道不支持 markdown 时自动降级成去掉颜色标签的纯文本，宁可没颜色也不能没消息。
+排版：应用消息通道固定发 text —— 实测微信端既不渲染 markdown（提示「暂不支持此
+消息类型」），也不渲染 textcard 的 div 配色（三色变全黑，嵌套标签直接漏源码），
+所以发给手机的那条必须是纯文本。群机器人（webhook）只在企业微信群里看，
+保留 markdown 彩色；两个通道各自渲染，内容同源。
 """
 
 import json
@@ -162,20 +163,16 @@ def push_app(value, content):
     if token_data.get("errcode") != 0:
         return "app:gettoken失败 %s" % token_data.get("errmsg")
     send_url = "%s/message/send?access_token=%s" % (QYAPI, token_data["access_token"])
+    # 应用消息固定发 text：收件人多数在微信里看（微信只渲染 text/image）。
+    # markdown 会显示「暂不支持此消息类型」，textcard 的 div 配色也不生效。
+    plain = fit_plain(content)
     r = post_json(send_url, {
-        "touser": touser, "msgtype": "markdown", "agentid": agentid,
-        "markdown": {"content": content}, "safe": 0,
+        "touser": touser, "msgtype": "text", "agentid": agentid,
+        "text": {"content": plain}, "safe": 0,
     })
-    downgraded = ""
-    if r.get("errcode") not in (0, None):
-        downgraded = "降级text(%s) " % (r.get("errmsg") or r.get("errcode"))
-        r = post_json(send_url, {
-            "touser": touser, "msgtype": "text", "agentid": agentid,
-            "text": {"content": fit_plain(content)}, "safe": 0,
-        })
     # 企微 message/send 在「无人可见」时 errcode 仍为 0，只回 invaliduser；
     # 把完整投递结果打进日志，避免出现「app:ok 但手机没收到」的假阳性。
-    bits = ["%serrcode=%s" % (downgraded, r.get("errcode")),
+    bits = ["errcode=%s" % r.get("errcode"),
             "errmsg=%s" % (r.get("errmsg") or "-")]
     if r.get("invaliduser"):
         bits.append("invaliduser=%s" % r["invaliduser"])
