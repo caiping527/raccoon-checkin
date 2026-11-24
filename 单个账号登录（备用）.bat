@@ -10,7 +10,7 @@ if errorlevel 1 goto nopython
 echo ============================================
 echo  备用入口：手动输入一个账号登录
 echo  日常请直接双击「一键更新.bat」，它会读
-echo  账号.json 自动登录全部账号。
+echo  AI路由魔改版 里的小浣熊账号，自动登录全部。
 echo ============================================
 echo.
 python "%~dp0password_login.py" %*
