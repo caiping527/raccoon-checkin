@@ -5,9 +5,11 @@
 配置边界
 --------
 * 公用的 GitHub 令牌 / 仓库地址：参数配置\配置.json（各模块共用）。
-* 本模块私有的账号密码：小浣熊签到更新\账号.json。
-  用「路由工具箱 → 小浣熊签到 → 账号管理」打开，一个账号框、一个密码框，
-  点保存就进下面的明文大框，可随时删除；不用输入逗号。账号不进公用配置。
+* 账号密码**只有一个来源**：AI路由魔改版（data\\accounts\\raccoon\\credentials.json）。
+  本目录不再保存任何账号或密码 —— 以前那份明文「账号.json」已删除，
+  因为同一个号在两个地方各存一份，改密码就会漏改一处。
+  要加号 / 改密码：打开 AI路由魔改版 → 渠道账号 → 小浣熊，
+  或用「小浣熊签到更新.html」里的账号管理（它写的也是 AI路由）。
 
 小浣熊（商汤）是独立账号体系，AiRoute 里没有它的凭据，做不到「直接读取」，
 但也不需要切客户端：用手机号 + 密码调登录接口换独立令牌。
@@ -19,7 +21,7 @@
     python batch_login.py --dry-run  只预览账号清单，不登录、不写 GitHub
     python batch_login.py --no-check 登记但不触发云端自检
 
-凭据：账号密码从本模块账号.json 读取；换来的令牌只经 stdin 传给 gh，
+凭据：账号密码从 AI路由魔改版 读取；换来的令牌只经 stdin 传给 gh，
       不进命令行参数、不打印、不落盘。
 """
 from __future__ import annotations
@@ -36,9 +38,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CONF_PATH = os.path.join(ROOT, '参数配置', '配置.json')
 LEGACY_CONF = os.path.join(ROOT, '配置.json')  # 旧版位置回落，只读
-ACCOUNT_PATH = os.path.join(HERE, '账号.json')  # 本模块私有账号
 sys.path.insert(0, os.path.join(HERE, 'scripts'))
 sys.path.insert(0, HERE)
+# 公共模块：账号统一从 AI路由魔改版 读（airoute_accounts.py 在里面）
+sys.path.insert(0, os.path.join(ROOT, '公共模块'))
 
 import iam_login  # noqa: E402
 import update  # noqa: E402  复用 jwt_payload / fetch_phone_tail / log / resolve_repo
@@ -71,20 +74,33 @@ def read_conf():
 
 
 def accounts_of():
-    """读本模块私有的账号清单（账号与密码分栏保存，无分隔符）。"""
+    """读小浣熊账号清单。
+
+    **唯一来源**是 AI路由魔改版（data\\accounts\\raccoon\\credentials.json，
+    手机号 + 加密密码）。用户只在 AI路由 里登一次，四个签到模块都从这里读。
+    本目录不再有第二份清单：读不到就是读不到，直接报错让人去 AI路由 加号，
+    而不是偷偷回退到一个可能早就过期、密码还和真实密码不一致的旧文件。
+    """
     try:
-        with open(ACCOUNT_PATH, encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception:
-        return []
+        import airoute_accounts
+    except Exception as exc:
+        raise RuntimeError(
+            '缺少公共模块 公共模块\\airoute_accounts.py（%s）。\n'
+            '  账号只能从 AI路由魔改版 读取，请确认公共模块目录完整。' % exc)
+
     out = []
-    for a in (data.get('accounts') or []):
-        if not isinstance(a, dict) or a.get('enabled') is False:
+    for acc in airoute_accounts.raccoon_accounts():
+        phone = str(acc.get('phone') or '').strip()
+        pwd = str(acc.get('password') or '')
+        if not re.fullmatch(r'1\d{10}', phone):
             continue
-        phone = str(a.get('phone') or '').strip()
-        pwd = str(a.get('password') or '').strip()
-        if re.fullmatch(r'1\d{10}', phone) and pwd:
-            out.append((phone, pwd))
+        if not pwd:
+            print('  WARN %s 的密码解不出来（AI路由 里这条记录没有密码）' % phone)
+            continue
+        out.append((phone, pwd))
+    if out:
+        path, why = airoute_accounts.explain()
+        print('  账号来源：AI路由魔改版（%d 个）· %s' % (len(out), why))
     return out
 
 
@@ -122,21 +138,25 @@ def main():
         pass
 
     hr()
-    print('  小浣熊签到 · 一键更新本模块账号清单里的全部账号')
+    print('  小浣熊签到 · 一键更新 AI路由魔改版 里的全部小浣熊账号')
     if args.dry_run:
         print('  【预览模式】不登录、不写入任何 Secret')
     hr()
 
     conf = read_conf()
-    accs = accounts_of()
+    try:
+        accs = accounts_of()
+    except RuntimeError as exc:
+        print('\n  【失败】%s' % exc)
+        return 1
     if not accs:
-        print('\n  本模块还没有小浣熊账号。')
-        print('  打开 小浣熊签到更新\account_editor.py，')
-        print('  一个账号框、一个密码框，填好点「保存」即可（不用逗号，明文可删除）。')
-        print('  填完再双击本工具，一次就能把全部账号登记完。')
+        print('\n  没有读到任何小浣熊账号。')
+        print('  账号只在 AI路由魔改版 里维护（登一次号，四个签到模块共用）：')
+        print('    打开 AI路由魔改版 → 渠道账号 → 小浣熊 → 添加账号，填手机号 + 密码。')
+        print('    也可以双击 小浣熊签到更新.html，用页面上的账号管理（写的同样是 AI路由）。')
         return 1
 
-    print('  本模块账号：%d 个（小浣熊签到更新\\账号.json）' % len(accs))
+    print('  待登记账号：%d 个' % len(accs))
     for phone, _ in accs:
         print('    %s****%s' % (phone[:3], phone[-4:]))
     hr()
