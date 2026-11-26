@@ -24,6 +24,7 @@
 
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -219,6 +220,7 @@ def recommend_rows(root):
             "nearest_date": nearest_date,                    # 积分开始过期的日子
             "nearest_days": nearest_days,
             "nearest_points": _num(nearest.get("remaining")),
+            "distribution": expiry.get("distribution") or [],
             "use_by": _day_before(nearest_date),             # 提前一天用掉
             # 签到失败时云端根本不会查余额，此时账本里的 0 不是真实余额，
             # 不能显示成「0 分 / 长期有效」，必须明确标成未取到
@@ -294,6 +296,37 @@ def build_report(rows):
     return "\n".join(lines) + "\n"
 
 
+def account_label(name):
+    """播报统一写「尾号 xxxx」；已经是尾号就不重复加。"""
+    text = str(name or "").strip()
+    if text.startswith("尾号"):
+        return text
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 4:
+        return "尾号" + digits[-4:]
+    return text or "未命名账号"
+
+
+def three_day_amount(r):
+    """从最早到期日开始的三天（含当天）合计要过期多少分。"""
+    start = r.get("nearest_date")
+    if not start:
+        return r.get("nearest_points") or 0
+    dist = [x for x in (r.get("distribution") or []) if isinstance(x, dict)]
+    if not dist:
+        return r.get("nearest_points") or 0
+    start_day = date.fromisoformat(str(start)[:10])
+    total = 0.0
+    for item in dist:
+        try:
+            day = date.fromisoformat(str(item.get("expire_date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        if start_day <= day <= start_day + timedelta(days=2):
+            total += _num(item.get("remaining"))
+    return round(total, 2)
+
+
 def build_daily_text(rows, run_url=None, expected=None):
     """每日积分播报（纯文本 + emoji 色标，微信里直接显示彩色）。
 
@@ -319,22 +352,26 @@ def build_daily_text(rows, run_url=None, expected=None):
 
     for r in rows:
         lines.append("")
-        lines.append(("🟩 " if r["status"] == "ok" else "🟥 ") + r["account"])
+        lines.append(("🟩 " if r["status"] == "ok" else "🟥 ") + account_label(r["account"]))
         if r["status"] != "ok":
             lines.append("❗ 签到失败：%s" % ((r["message"] or "未知原因")[:60]))
             continue
         if not r["has_data"]:
             lines.append("⚪ 积分数据未取到")
             continue
-        lines.append("💰 当前积分 %g 分（签到 %g / 奖励 %g）"
-                     % (r["held"], r["daily"], r["reward"]))
+        lines.append("💰 当前积分 %g 分" % r["held"])
         if r["nearest_date"]:
             days = r["nearest_days"]
-            lines.append("📅 %s 开始过期，剩 %s 天，这批 %g 分"
-                         % (r["nearest_date"], days if days is not None else "?",
-                            r["nearest_points"]))
-            if isinstance(days, (int, float)) and days <= 1:
-                lines.append("⏰ 今天就用掉，明天开始作废")
+            if isinstance(days, (int, float)):
+                when = "今天" if days <= 0 else "明天" if days == 1 else "%s 天后" % days
+            else:
+                when = "?"
+            lines.append("📅 %s，%s 开始，三天内过期 %g 分"
+                         % (when, r["nearest_date"], three_day_amount(r)))
+            if isinstance(days, (int, float)) and days <= 0:
+                lines.append("⏰ 今天就到期，尽快用掉")
+            elif isinstance(days, (int, float)) and days == 1:
+                lines.append("⏰ 明天就到期，今天用掉")
             elif r["use_by"]:
                 lines.append("⏰ 建议 %s 前用掉（提前一天）" % r["use_by"])
         else:
