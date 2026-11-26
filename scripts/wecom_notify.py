@@ -367,7 +367,7 @@ def build_daily_text(rows, run_url=None, expected=None):
                 when = "今天" if days <= 0 else "明天" if days == 1 else "%s 天后" % days
             else:
                 when = "?"
-            lines.append("📅 %s，%s 开始，三天内过期 %g 分"
+            lines.append("📅 %s，%s 开始，三天内约过期 %g 分"
                          % (when, r["nearest_date"], three_day_amount(r)))
             if isinstance(days, (int, float)) and days <= 0:
                 lines.append("⏰ 今天就到期，尽快用掉")
@@ -386,7 +386,7 @@ def build_daily_text(rows, run_url=None, expected=None):
         lines.append("📣 今天优先用 %s，临期积分先用，别拖到过期当天" % soon[0]["account"])
     else:
         lines.append("⚪ 今天没有临期积分，不用特意切号")
-    lines.append("⚪ 注：签到积分有明确到期日；奖励分未标注到期日的不猜测")
+    lines.append("⚪ 注：签到积分有明确到期日；奖励分未标注到期日的不猜测；逐日剩余按「先到期先扣」分摊")
     if run_url:
         lines.append("🔗 运行详情：%s" % run_url)
     return fit_text("\n".join(lines))
