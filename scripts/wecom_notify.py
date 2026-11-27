@@ -227,12 +227,51 @@ def recommend_rows(root):
             "has_data": (str(data.get("status") or "unknown") == "ok"
                          and (bool(expiry) or balance.get("available_points") is not None)),
         })
-    # 临期积分多的排最前；今晚就清零的 300 分优先级最高，余额为 0 的沉底
-    rows.sort(key=lambda r: (-r["same_day"], -r["soon"], -r["held"],
-                             r["nearest_days"] if isinstance(r["nearest_days"], (int, float))
-                             else 999,
-                             r["account"]))
+    # 排序按「先到期先用」：
+    #   1) 今晚就清零的 300 分最优先（same_day）
+    #   2) 最早到期日近的在前 —— 这才是 AiRoute 的真实消耗顺序
+    #   3) 同一天到期时，临期/三天内到期的分多的在前
+    #   4) 再按总积分、账号名稳定排序
+    # 注意：绝不能拿 soon（warn_days=2 天窗口）当主键。窗口外的号全记 0 分，
+    # 一旦退化成按总积分排，就会把「积分最多但最晚到期」的号推到第一位。
+    rows.sort(key=lambda r: (
+        -r["same_day"],
+        0 if isinstance(r["nearest_days"], (int, float)) else 1,
+        r["nearest_days"] if isinstance(r["nearest_days"], (int, float)) else 999,
+        -r["soon"],
+        -three_day_amount(r),
+        -r["held"],
+        r["account"]))
     return rows
+
+
+def pick_today(rows, window=7):
+    """今天该用哪些号：取「最早到期日」那一组，同一天的都算。
+
+    一天的消耗量有限（几百到上千分），同一天有多个号到期时往往要轮着用，
+    所以不能只推一个号。窗口默认 7 天，与 WorkBuddy 播报口径一致。
+    """
+    cand = [r for r in rows
+            if r["has_data"] and isinstance(r["nearest_days"], (int, float))
+            and r["nearest_days"] <= window]
+    if not cand:
+        return []
+    first = min(r["nearest_days"] for r in cand)
+    return [r for r in cand if r["nearest_days"] == first]
+
+
+def today_sentence(rows):
+    """推荐句：把「最早到期日」那一组号全列出来，并给出合计到期分。"""
+    picked = pick_today(rows)
+    if not picked:
+        return "⚪ 近 7 天没有临期积分，不用特意切号"
+    days = picked[0]["nearest_days"]
+    when = "今天" if days <= 0 else "明天" if days == 1 else "%s 天后" % days
+    names = "、".join(account_label(r["account"]) for r in picked)
+    total = sum(three_day_amount(r) for r in picked)
+    extra = "，三天内共 %g 分要过期" % total if total else ""
+    return "📣 今天优先用 %s —— %s开始过期（%s）%s" % (
+        names, picked[0]["nearest_date"], when, extra)
 
 
 def _expiry_sentence(r):
@@ -256,13 +295,14 @@ def build_report(rows):
     """Markdown 榜单，写入 Actions Summary（GitHub 页面用，不是手机推送）。"""
     if not rows:
         return "#### 每日积分播报\n\n- 本次没有收到任何账号的积分数据。\n"
-    lines = ["#### 每日积分播报（按临期未用积分从多到少排序）", "",
-             "| 排名 | 账号 | 当前积分 | 开始过期日 | 建议用掉日 | 临期待用 | 签到积分 | 奖励积分 | 签到状态 |",
+    lines = ["#### 每日积分播报（按最早到期日排序，先到期先用）", "",
+             "| 排名 | 账号 | 当前积分 | 开始过期日 | 建议用掉日 | 三天内过期 | 签到积分 | 奖励积分 | 签到状态 |",
              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for i, r in enumerate(rows, 1):
         if r["has_data"]:
             held = "**%g**" % r["held"]
-            daily, reward, soon = "%g" % r["daily"], "%g" % r["reward"], "%g 分" % r["soon"]
+            daily, reward = "%g" % r["daily"], "%g" % r["reward"]
+            soon = "%g 分" % three_day_amount(r)
             nearest = r["nearest_date"] or "—"
             use_by = r["use_by"] or "—"
             if r["nearest_date"] and isinstance(r["nearest_days"], (int, float)) \
@@ -287,12 +327,12 @@ def build_report(rows):
         lines.append("")
     soon = [r for r in rows if r["soon"] > 0]
     if soon:
-        lines.append("**建议：今天优先用 %s 跑代码**，可先消耗 %g 分（%s 天后到期）。"
-                     % (soon[0]["account"], soon[0]["soon"], soon[0]["nearest_days"]))
-        if len(soon) > 1:
-            lines.append("多个号都有临期积分：按上表顺序依次使用，临期积分多的先用。")
-    else:
-        lines.append("当前没有账号有临期签到积分，无需特意切换账号。")
+        lines.append("**⚠️ 近 2 天内到期**：%s"
+                     % "、".join("%s（%s，剩 %s 天，%g 分）"
+                                % (r["account"], r["nearest_date"],
+                                   r["nearest_days"], r["soon"]) for r in soon))
+        lines.append("")
+    lines.append("**" + today_sentence(rows).lstrip("📣⚪ ") + "**")
     return "\n".join(lines) + "\n"
 
 
@@ -380,12 +420,8 @@ def build_daily_text(rows, run_url=None, expected=None):
         if r["same_day"] > 0:
             lines.append("🔔 今日 %g 分今晚 23:59 清零，尽快登录用掉" % r["same_day"])
 
-    soon = [r for r in rows if r["soon"] > 0]
     lines.append("")
-    if soon:
-        lines.append("📣 今天优先用 %s，临期积分先用，别拖到过期当天" % soon[0]["account"])
-    else:
-        lines.append("⚪ 今天没有临期积分，不用特意切号")
+    lines.append(today_sentence(rows))
     lines.append("⚪ 注：签到积分有明确到期日；奖励分未标注到期日的不猜测；逐日剩余按「先到期先扣」分摊")
     if run_url:
         lines.append("🔗 运行详情：%s" % run_url)
