@@ -29,6 +29,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TAIL_RE = re.compile(r"^\d{4}$")
 
 
+def _conf_repo():
+    """仓库名唯一来源：参数配置\\配置.json 的 repos.raccoon（读不到返回空）。"""
+    try:
+        path = os.path.join(os.path.dirname(HERE), "参数配置", "配置.json")
+        with open(path, encoding="utf-8") as f:
+            repos = (json.load(f) or {}).get("repos") or {}
+        return str((repos.get("raccoon") if isinstance(repos, dict) else "") or "").strip()
+    except Exception:
+        return ""
+
+
+try:                      # 代理唯一来源：配置.json 的 proxy（空 = 直连）
+    _pub = os.path.join(os.path.dirname(HERE), "参数配置")
+    if _pub not in sys.path:
+        sys.path.insert(0, _pub)
+    import net_proxy
+    net_proxy.apply_env()
+except Exception:
+    pass
+
+
 def log(tail, target, ok, note=""):
     """运行摘要只打印到控制台，不落盘（总说明格式约定）。"""
     print("  手机号尾号%s | %s | %s%s" % (
@@ -71,6 +92,9 @@ def jwt_payload(token):
 def resolve_repo(explicit):
     if explicit:
         return explicit
+    conf_repo = _conf_repo()
+    if conf_repo:
+        return conf_repo
     env_repo = (os.environ.get("RACCOON_REPO") or "").strip()
     if env_repo:
         return env_repo
