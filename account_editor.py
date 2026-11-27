@@ -15,7 +15,7 @@ AI路由 里登一次、这里再填一次，改密码还得改两处、两边�
   · AI路由 没在运行时：只允许改**已有账号**的密码（直接改本地凭据文件，
     加密后写入），新增账号需要联网登录，会提示先启动 AI路由。
 
-本机还会自动找账号目录（见 公共模块\\airoute_accounts.py），换电脑把整个
+本机还会自动找账号目录（见 参数配置\\airoute_accounts.py），换电脑把整个
 「Github&Gitee签到」文件夹拷走即可，副本里带着最新凭据。
 """
 from __future__ import annotations
@@ -29,15 +29,15 @@ from tkinter import ttk
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(HERE)
-# 共用小工具统一放在上一级的「公共模块」里；根目录也留着，老版本照旧能跑
-for _p in (os.path.join(_PARENT, '公共模块'), _PARENT):
+# 共用小工具统一放在上一级的「参数配置」里；根目录也留着，老版本照旧能跑
+for _p in (os.path.join(_PARENT, '参数配置'), _PARENT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 from ui_pos import place_top_right          # 窗口统一弹在屏幕右上角（左边在看电视）
 
 try:
     import airoute_accounts as AA
-except Exception as _exc:                   # 公共模块被删时给出可读的提示
+except Exception as _exc:                   # 参数配置被删时给出可读的提示
     AA = None
     _IMPORT_ERROR = str(_exc)
 else:
@@ -67,7 +67,7 @@ def load():
 def _status_text():
     """顶部来源说明：读的是哪个目录、AI路由 在不在跑。"""
     if AA is None:
-        return '公共模块 airoute_accounts.py 未加载：%s' % _IMPORT_ERROR
+        return '参数配置 airoute_accounts.py 未加载：%s' % _IMPORT_ERROR
     try:
         path, why = AA.explain()
     except Exception as exc:
@@ -187,7 +187,7 @@ def open_editor(parent=None):
             tip.configure(fg='#B4402F', text='密码不能为空。')
             return
         if AA is None:
-            tip.configure(fg='#B4402F', text='公共模块未加载，无法保存：%s' % _IMPORT_ERROR)
+            tip.configure(fg='#B4402F', text='参数配置未加载，无法保存：%s' % _IMPORT_ERROR)
             return
         try:
             if AA.service_running():
@@ -212,7 +212,7 @@ def open_editor(parent=None):
             return
         acc = rows[sel[0]]
         if AA is None:
-            tip.configure(fg='#B4402F', text='公共模块未加载，无法删除。')
+            tip.configure(fg='#B4402F', text='参数配置未加载，无法删除。')
             return
         try:
             if AA.service_running():
@@ -256,17 +256,19 @@ def open_editor(parent=None):
     refresh()
 
     # ── 云端签到时间：直接挂在这个窗口里，不另开窗口 ──
-    # 时间属于本模块私有的云端配置，跟账号放一起最直观：改账号、改时间都在同一页。
-    # 面板由同目录的「签到时间.py」提供；它被删掉时只影响这一块，账号管理照常用。
+    # 面板来自公共积木 参数配置\云端运行时间.py（四个签到模块共用同一块，
+    # 免得各写一份、改一处漏三处）。它加载失败只影响这一块，账号管理照常用。
     try:
-        import importlib.util
-        _spec = importlib.util.spec_from_file_location(
-            'raccoon_schedule', os.path.join(HERE, '签到时间.py'))
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        _mod.make_panel(win).pack(fill='x', padx=18, pady=(6, 6))
+        import 云端运行时间 as CT
+        CT.make_panel(win, 'caiping527/raccoon-checkin',
+                      '.github/workflows/checkin.yml',
+                      os.path.join(HERE, '.github', 'workflows', 'checkin.yml'),
+                      '小浣熊签到',
+                      note='积分单笔只活 7 天，必须每天登录一次。计划 03:58 加 GitHub 延迟 '
+                           '3~8 小时，实际落在 06:58~11:58。'
+                      ).pack(fill='x', padx=18, pady=(6, 6))
     except Exception as exc:  # noqa: BLE001
-        tk.Label(win, text='签到时间面板未加载：%s（账号功能不受影响）' % exc,
+        tk.Label(win, text='云端运行时间面板未加载：%s（账号功能不受影响）' % exc,
                  bg='#F4F7FC', fg='#B4402F', justify='left',
                  font=('Microsoft YaHei UI', 9), wraplength=640).pack(anchor='w', padx=18)
 
